@@ -1,0 +1,128 @@
+@keyframes cele-bounce {
+  0% { transform: scale(0.7) translateY(-40px); opacity: 0.7; }
+  40% { transform: scale(1.15) translateY(0); opacity: 1; }
+  60% { transform: scale(0.95) translateY(-10px); }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+@keyframes cele-sparkle {
+  0% { filter: brightness(1.5) drop-shadow(0 0 8px #fff176); }
+  50% { filter: brightness(2.2) drop-shadow(0 0 16px #fff176); }
+  100% { filter: brightness(1) drop-shadow(0 0 0 #fff176); }
+}
+@keyframes cele-flash {
+  0% { opacity: 0.7; }
+  60% { opacity: 0.2; }
+  100% { opacity: 0; }
+}
+.cele-anim-bounce { animation: cele-bounce 1.2s cubic-bezier(.23,1.12,.62,1.01) both; }
+.cele-anim-sparkle { animation: cele-sparkle 1.2s ease-in-out both; }
+.cele-flash-bg { position: fixed; inset: 0; pointer-events: none; z-index: 40; }
+.cele-flash { position: fixed; inset: 0; background: radial-gradient(circle, #fffde4 0%, #fff176 60%, transparent 100%); opacity: 0.7; animation: cele-flash 0.7s ease-in; z-index: 49; pointer-events: none; }
+.App {
+  text-align: left;
+}
+
+.App-logo {
+  height: 40vmin;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .App-logo {
+    animation: App-logo-spin infinite 20s linear;
+  }
+
+/* Celebration overlay styles */
+@keyframes cele-pop {
+  0% { transform: scale(0.6) rotate(-6deg); opacity: 0; }
+  50% { transform: scale(1.06) rotate(1deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+@keyframes cele-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(255,255,255,0.6); }
+  100% { box-shadow: 0 0 0 24px rgba(255,255,255,0); }
+}
+
+@keyframes cele-fall {
+  0% { transform: translateY(-120% ) rotate(0deg); opacity: 0; }
+  10% { opacity: 1; }
+  100% { transform: translateY(120vh) rotate(360deg); opacity: 1; }
+}
+
+@keyframes cele-wiggle {
+  0%, 100% { transform: rotate(-3deg) scale(1); }
+  50% { transform: rotate(3deg) scale(1.02); }
+}
+@keyframes cele-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+@keyframes cele-smash {
+  0% { transform: scale(0.9); }
+  50% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+
+.cele-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 28px;
+  border-radius: 9999px;
+  animation: cele-pop 280ms ease-out both, cele-pulse 1200ms ease-out 200ms 2;
+  backdrop-filter: blur(6px);
+}
+.cele-anim-wiggle { animation: cele-wiggle 700ms ease-in-out 3, cele-pulse 1200ms ease-out 200ms 2; }
+.cele-anim-shake { animation: cele-shake 600ms ease-in-out 3, cele-pulse 1200ms ease-out 200ms 2; }
+.cele-anim-smash { animation: cele-smash 500ms ease-out 2, cele-pulse 1200ms ease-out 200ms 2; }
+.cele-badge-good {
+  background: linear-gradient(135deg, rgba(16,185,129,0.95), rgba(59,130,246,0.95));
+  color: white;
+}
+.cele-badge-wicket {
+  background: linear-gradient(135deg, rgba(244,63,94,0.95), rgba(251,146,60,0.95));
+  color: white;
+}
+.cele-text {
+  font-weight: 800;
+  letter-spacing: 1px;
+  font-size: clamp(20px, 6vw, 40px);
+}
+.cele-confetti {
+  position: absolute;
+  top: -12px;
+  width: 10px;
+  height: 14px;
+  border-radius: 2px;
+  animation: cele-fall 1.8s ease-in forwards;
+  opacity: 0.9;
+}
+
+}
+
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+
+.App-link {
+  color: #61dafb;
+}
+
+@keyframes App-logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

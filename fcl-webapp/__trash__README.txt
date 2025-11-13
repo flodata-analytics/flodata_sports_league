@@ -1,0 +1,1 @@
+This folder temporarily stores removed files for reference during editing sessions. Safe to delete.

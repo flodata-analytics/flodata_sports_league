@@ -1,0 +1,21 @@
+<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 8 19" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="cricket-bat-01 1" clip-path="url(#clip0_0_4)">
+<path id="rect1104" d="M3.37011 6.07815L4.5406 5.99915L5.62711 6.3312L6.65119 7.08068L3.298 18.0533C2.70903 18.0886 2.15597 18.3121 1.54517 18.1124C0.818063 17.8928 0.521641 17.4204 0.017199 17.0505L3.37011 6.07815Z" fill="url(#paint0_linear_0_4)"/>
+<path id="rect1106" d="M6.38659 0.193746L7.48249 0.528567L5.70424 6.3476L4.33457 8.86926L4.60833 6.01251L6.38659 0.193746Z" fill="url(#paint1_linear_0_4)" stroke="var(--stroke-0, #7B0505)" stroke-width="0.0267656"/>
+<path id="path1108" d="M7.49056 0.509736C7.46791 0.583866 7.38832 0.63728 7.26931 0.658226C7.1503 0.679171 7.00162 0.665934 6.85597 0.621425C6.71031 0.576916 6.57963 0.504782 6.49265 0.420891C6.40568 0.337001 6.36955 0.248225 6.3922 0.174094C6.41485 0.0999639 6.49444 0.0465509 6.61345 0.0256051C6.73246 0.00465936 6.88114 0.0178966 7.0268 0.0624055C7.17245 0.106914 7.30313 0.179049 7.39011 0.262939C7.47708 0.34683 7.51321 0.435605 7.49056 0.509736Z" fill="var(--fill-0, #BD1E1E)" stroke="var(--stroke-0, #810404)" stroke-width="0.0250316"/>
+</g>
+<defs>
+<linearGradient id="paint0_linear_0_4" x1="1.29542" y1="9.68776" x2="6.03197" y2="11.3367" gradientUnits="userSpaceOnUse">
+<stop stop-color="#D1A337"/>
+<stop offset="0.5" stop-color="#D0B131"/>
+<stop offset="1" stop-color="#D1A337"/>
+</linearGradient>
+<linearGradient id="paint1_linear_0_4" x1="5.07018" y1="4.44284" x2="6.19865" y2="4.78769" gradientUnits="userSpaceOnUse">
+<stop stop-color="#CA3030"/>
+<stop offset="1" stop-color="#A52727"/>
+</linearGradient>
+<clipPath id="clip0_0_4">
+<rect width="7.51276" height="18.2118" fill="white"/>
+</clipPath>
+</defs>
+</svg>
