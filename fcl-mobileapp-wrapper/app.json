@@ -1,0 +1,72 @@
+{
+  "expo": {
+    "name": "FCL 2025",
+    "slug": "fcl-2025",
+    "version": "1.0.0",
+    "orientation": "portrait",
+  "icon": "./assets/images/FCL APK Logo ( 512 X 512 px ).png",
+    "scheme": "fclapk",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/FCL APK Logo ( 512 X 512 px ).png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.fclapk.tournamentapp",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/images/FCL APK Logo ( 512 X 512 px ).png"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "com.fclapk.tournamentapp",
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE"
+      ],
+      "usesCleartextTraffic": true
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/FCL APK Logo ( 512 X 512 px ).png",
+          "imageWidth": null,
+          "resizeMode": "cover",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "backgroundColor": "#000000"
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "description": "FCL 2025 — Official FLOdata tournaments app.",
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "9de6d3a1-da86-4268-8ab4-5eb5f86d1874"
+      }
+    }
+  }
+}

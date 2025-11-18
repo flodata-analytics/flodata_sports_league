@@ -1,0 +1,27 @@
+{
+  "cli": {
+    "version": ">= 7.5.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "preview": {
+      "developmentClient": false,
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "developmentClient": false,
+      "ios": {
+        "simulator": false
+      },
+      "android": {
+        "gradleCommand": ":app:bundleRelease",
+        "distribution": "store"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
