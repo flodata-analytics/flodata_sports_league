@@ -2,9 +2,14 @@ import React, { useState } from 'react';
 import TeamLogo from '../components/TeamLogo';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { addDoc, collection, setDoc, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
-// Client-side upload helpers for use when server endpoint is not available
-import { uploadImage, buildImagePath } from '../utils/uploadImage';
+import { addDoc, collection, setDoc, doc, updateDoc, deleteDoc, increment, getDoc } from 'firebase/firestore';
+// Storage removed; inline base64 images used now.
+const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+  reader.readAsDataURL(file);
+});
 import { useCollection, useDocument } from '../hooks/useFirestore';
 import { getPlayerAvatar, isCustomAvatar } from '../utils/getPlayerAvatar';
 
@@ -14,6 +19,7 @@ function Umpire() {
   const [team1, setTeam1] = useState('Team Blue');
   const [team2, setTeam2] = useState('Team White');
   const [venue, setVenue] = useState('');
+  const [venueMapUrl, setVenueMapUrl] = useState('');
   const [date, setDate] = useState(() => new Date().toISOString().slice(0,10));
   const [totalOvers, setTotalOvers] = useState(20);
   const [playersPerSideSetup, setPlayersPerSideSetup] = useState(11);
@@ -82,6 +88,7 @@ function Umpire() {
   const [pUploading, setPUploading] = useState(false);
   const [pRole, setPRole] = useState('batsman'); // batsman | bowler | all-rounder
   const [pBattingStyle, setPBattingStyle] = useState('right-handed'); // right-handed | left-handed
+  const [pJerseyNumber, setPJerseyNumber] = useState('');
   const [epAvatarPreview, setEpAvatarPreview] = useState('');
 
   // Control tab local state (rosters, locks, overrides)
@@ -126,6 +133,7 @@ function Umpire() {
   const [epStatus, setEpStatus] = useState('available');
   const [epRole, setEpRole] = useState('');
   const [epBattingStyle, setEpBattingStyle] = useState('');
+  const [epJerseyNumber, setEpJerseyNumber] = useState('');
   
   // Teams collection for dynamic team selection (hooks must be before any early return)
   const { data: teams } = useCollection('teams', 'name', [], 200, { enabled: true, poll: false });
@@ -195,14 +203,13 @@ function Umpire() {
     );
   };
 
-  // Helper: upload a file directly to Firebase Storage (client-side)
-  const uploadFile = async (file, name = 'file', folder = 'uploads') => {
+  // File upload replaced by base64 conversion (no external storage)
+  const readImageInline = async (file) => {
     if (!file) throw new Error('No file');
-    setMessage('Uploading image...');
-    const path = buildImagePath(folder, name, file);
-    const url = await uploadImage(file, path);
-    setMessage('Image uploaded successfully.');
-    return url;
+    setMessage('Reading image...');
+    const dataUrl = await fileToDataUrl(file);
+    setMessage('Image ready.');
+    return dataUrl;
   };
 
   // Sync local roster/lock state from current match
@@ -569,6 +576,7 @@ function Umpire() {
       const bowlerName = currentMatch?.currentBowlerName || '';
   const striker = findOrAddBatter(inn, strikerSel, strikerName);
   const bwEntry = findOrAddBowler(inn, bowlerSel, bowlerName);
+  if (typeof bwEntry._thisOverRuns !== 'number') bwEntry._thisOverRuns = 0;
     if (!inn.total) inn.total = { runs: 0, wickets: 0, overs: '0.0', extras: { wides: 0, noBalls: 0, byes: 0, legByes: 0, penalties: 0 } };
     if (!inn.total.extras) inn.total.extras = { wides: 0, noBalls: 0, byes: 0, legByes: 0, penalties: 0 };
 
@@ -589,9 +597,11 @@ function Umpire() {
         if (norm === 'B') {
           // Byes: do not credit batter; do not charge bowler
           inn.total.extras.byes = (inn.total.extras.byes || 0) + runsAdd;
+          // no addition to bowler over runs; not a dot if runsAdd>0 (always >=1 here)
         } else if (norm === 'Lb') {
           // Leg byes: do not credit batter; do not charge bowler
           inn.total.extras.legByes = (inn.total.extras.legByes || 0) + runsAdd;
+          // leg-bye with runs is not a dot; no bowler run addition
         } else {
           if (runsAdd > 0) {
             striker.runs = (striker.runs || 0) + runsAdd;
@@ -600,6 +610,10 @@ function Umpire() {
             bwEntry.runsConceded = (bwEntry.runsConceded || 0) + runsAdd;
             if (runsAdd === 4) bwEntry.foursConceded = (bwEntry.foursConceded || 0) + 1;
             if (runsAdd === 6) bwEntry.sixesConceded = (bwEntry.sixesConceded || 0) + 1;
+            bwEntry._thisOverRuns += runsAdd;
+          } else {
+            // legal delivery, no runs: dot ball
+            bwEntry.dots = (bwEntry.dots || 0) + 1;
           }
         }
         const b = (prev.ball || 0) + 1;
@@ -607,6 +621,11 @@ function Umpire() {
           next.currentBall = 0;
           next.currentOver = (prev.over || 0) + 1;
           swapStrike = true;
+          // Over finished: check maiden
+          if ((bwEntry._thisOverRuns || 0) === 0) {
+            bwEntry.maidens = (bwEntry.maidens || 0) + 1;
+          }
+          bwEntry._thisOverRuns = 0;
         } else {
           next.currentBall = b;
           next.currentOver = prev.over || 0;
@@ -617,11 +636,13 @@ function Umpire() {
           const wd = runsAdd; // already computed
           inn.total.extras.wides = (inn.total.extras.wides || 0) + wd;
           bwEntry.runsConceded = (bwEntry.runsConceded || 0) + wd;
+          bwEntry._thisOverRuns += wd;
         }
         if (norm === 'Nb') {
           const extra = Math.max(0, parseInt(extraRuns) || 0);
           inn.total.extras.noBalls = (inn.total.extras.noBalls || 0) + 1;
           bwEntry.runsConceded = (bwEntry.runsConceded || 0) + (1 + extra);
+          bwEntry._thisOverRuns += (1 + extra);
           if (extra > 0) {
             striker.runs = (striker.runs || 0) + extra;
             if (extra === 4) striker.fours = (striker.fours || 0) + 1;
@@ -803,6 +824,7 @@ function Umpire() {
       const striker = findOrAddBatter(inn, strikerSel, currentMatch?.currentStrikerName || '');
       const nonStriker = findOrAddBatter(inn, nonStrikerSel, currentMatch?.currentNonStrikerName || '');
       const bwEntry2 = findOrAddBowler(inn, bowlerSel, currentMatch?.currentBowlerName || '');
+      if (typeof bwEntry2._thisOverRuns !== 'number') bwEntry2._thisOverRuns = 0;
       // Count legal delivery for bowler
       bwEntry2.balls = (bwEntry2.balls || 0) + 1;
       // Determine who is out
@@ -816,6 +838,15 @@ function Umpire() {
         ? (((battingTeamSel==='team1'? team2Roster: team1Roster).find(p=> (p.id||p.playerId)===wicketFielder)?.name) || '')
         : '';
       outBatter.howOut = { type: wicketType, bowler: currentMatch?.currentBowlerName || '', fielder: fName };
+      // Wicket ball with no runs counts as a dot
+      bwEntry2.dots = (bwEntry2.dots || 0) + 1;
+      // Over finished check for maiden
+      if (next.currentBall === 0) {
+        if ((bwEntry2._thisOverRuns || 0) === 0) {
+          bwEntry2.maidens = (bwEntry2.maidens || 0) + 1;
+        }
+        bwEntry2._thisOverRuns = 0;
+      }
       // Update totals
       const totalRuns = (battingKey === 'team1') ? next.team1.runs : next.team2.runs;
       const totalWickets = (battingKey === 'team1') ? next.team1.wickets : next.team2.wickets;
@@ -977,6 +1008,7 @@ function Umpire() {
         title: `${team1} vs ${team2}`,
         date,
         venue,
+        venueMapUrl: venueMapUrl || null,
   totalOvers: parseInt(totalOvers) || 20,
   numPlayers: parseInt(playersPerSideSetup) || 11,
   playersPerSide: parseInt(playersPerSideSetup) || 11,
@@ -1096,32 +1128,128 @@ function Umpire() {
     }
   };
 
-  // Finalize match and update cumulative player stats in 'players' collection
+  // Finalize match and update cumulative player stats in 'players' and 'playerProfiles'
   const finalizeMatchAndUpdateStats = async () => {
     try {
       const inns = Array.isArray(currentMatch?.innings) ? currentMatch.innings : [];
       const t1Roster = Array.isArray(currentMatch?.team1?.players) ? currentMatch.team1.players : [];
       const t2Roster = Array.isArray(currentMatch?.team2?.players) ? currentMatch.team2.players : [];
       const playedIds = new Set([...t1Roster, ...t2Roster].map(p => p.id||p.playerId).filter(Boolean));
-      const deltas = {}; // { playerId: { runs:0, wickets:0 } }
+      const agg = {}; // per-player aggregates for this match
       inns.forEach(inn => {
-        (Array.isArray(inn.batting) ? inn.batting : []).forEach(b => {
-          const pid = b.playerId || b.id; if (!pid) return; if (!deltas[pid]) deltas[pid] = { runs: 0, wickets: 0 };
-          deltas[pid].runs += (parseInt(b.runs)||0);
+        const batting = Array.isArray(inn.batting) ? inn.batting : [];
+        batting.forEach(b => {
+          const pid = b.playerId || b.id; if (!pid) return;
+          if (!agg[pid]) agg[pid] = { batRuns:0, batBalls:0, fours:0, sixes:0, hs:0, bowlWkts:0, bowlBalls:0, bowlRuns:0, dots:0, maidens:0, best:0 };
+          agg[pid].batRuns += (parseInt(b.runs)||0);
+          agg[pid].batBalls += (parseInt(b.balls)||0);
+          agg[pid].fours += (parseInt(b.fours)||0);
+          agg[pid].sixes += (parseInt(b.sixes)||0);
+          agg[pid].hs = Math.max(agg[pid].hs, (parseInt(b.runs)||0));
         });
-        (Array.isArray(inn.bowling) ? inn.bowling : []).forEach(bw => {
-          const pid = bw.playerId || bw.id; if (!pid) return; if (!deltas[pid]) deltas[pid] = { runs: 0, wickets: 0 };
-          deltas[pid].wickets += (parseInt(bw.wickets)||0);
+        const bowling = Array.isArray(inn.bowling) ? inn.bowling : [];
+        bowling.forEach(bw => {
+          const pid = bw.playerId || bw.id; if (!pid) return;
+          if (!agg[pid]) agg[pid] = { batRuns:0, batBalls:0, fours:0, sixes:0, hs:0, bowlWkts:0, bowlBalls:0, bowlRuns:0, dots:0, maidens:0, best:0 };
+          const wk = parseInt(bw.wickets)||0;
+          agg[pid].bowlWkts += wk;
+          agg[pid].bowlBalls += (parseInt(bw.balls)||0);
+          agg[pid].bowlRuns += (parseInt(bw.runsConceded)||0);
+          agg[pid].dots += (parseInt(bw.dots)||0);
+          agg[pid].maidens += (parseInt(bw.maidens)||0);
+          agg[pid].best = Math.max(agg[pid].best, wk);
         });
       });
-      // Update each player
+
+      // Update each player: players (increments) and playerProfiles (absolute totals + rates)
       for (const pid of playedIds) {
-        const d = deltas[pid] || { runs: 0, wickets: 0 };
-        await updateDoc(doc(db, 'players', pid), {
-          matches: increment(1),
-          runs: increment(d.runs),
-          wickets: increment(d.wickets),
-        });
+        const a = agg[pid] || { batRuns:0, batBalls:0, fours:0, sixes:0, hs:0, bowlWkts:0, bowlBalls:0, bowlRuns:0, dots:0, maidens:0, best:0 };
+        // Read existing players doc to compute derived rates/bands for fantasy points
+        let prevPlayers = {};
+        try {
+          const pSnap = await getDoc(doc(db, 'players', pid));
+          if (pSnap.exists()) prevPlayers = pSnap.data() || {};
+        } catch {}
+        const plRuns = (parseInt(prevPlayers.runs)||0) + a.batRuns;
+        const plBallsFaced = (parseInt(prevPlayers.ballsFaced)||0) + a.batBalls;
+        const plWkts = (parseInt(prevPlayers.wickets)||0) + a.bowlWkts;
+        const plBallsBowled = (parseInt(prevPlayers.ballsBowled)||0) + a.bowlBalls;
+        const plOvers = plBallsBowled > 0 ? (plBallsBowled/6) : 0;
+        const plRunsConc = (parseInt(prevPlayers.runsConceded)||0) + a.bowlRuns;
+        const plDotBalls = (parseInt(prevPlayers.dotBalls)||0) + a.dots;
+        const plMaidens = (parseInt(prevPlayers.maidens)||0) + a.maidens;
+        const plFours = (parseInt(prevPlayers.fours)||0) + a.fours;
+        const plSixes = (parseInt(prevPlayers.sixes)||0) + a.sixes;
+        const plStrike = plBallsFaced > 0 ? (plRuns * 100) / plBallsFaced : null;
+        const plEco = plOvers > 0 ? (plRunsConc / plOvers) : null;
+        const plHS = Math.max(parseInt(prevPlayers.highestScore)||0, a.hs||0);
+        const plBest = Math.max(parseInt(prevPlayers.bestWickets)||0, a.best||0);
+        try {
+          await updateDoc(doc(db, 'players', pid), {
+            matches: increment(1),
+            runs: plRuns,
+            wickets: plWkts,
+            fours: plFours,
+            sixes: plSixes,
+            ballsFaced: plBallsFaced,
+            ballsBowled: plBallsBowled,
+            oversBowled: plOvers,
+            runsConceded: plRunsConc,
+            dotBalls: plDotBalls,
+            maidens: plMaidens,
+            highestScore: plHS,
+            bestWickets: plBest,
+            strikeRate: plStrike != null ? Math.round(plStrike * 100) / 100 : null,
+            economy: plEco != null ? Math.round(plEco * 100) / 100 : null,
+          });
+        } catch {}
+
+        // Read profile to compute derived rates and maxima; create if missing baseline
+        let prev = {};
+        try {
+          const snap = await getDoc(doc(db, 'playerProfiles', pid));
+          if (snap.exists()) prev = snap.data() || {};
+        } catch {}
+
+        const totalRuns = (parseInt(prev.totalRuns)||0) + a.batRuns;
+        const totalBallsFaced = (parseInt(prev.ballsFaced)||0) + a.batBalls;
+        const totalFours = (parseInt(prev.fours)||0) + a.fours;
+        const totalSixes = (parseInt(prev.sixes)||0) + a.sixes;
+        const highestScore = Math.max(parseInt(prev.highestScore)||0, a.hs||0);
+
+        const totalWickets = (parseInt(prev.totalWickets)||0) + a.bowlWkts;
+        const ballsBowledTotal = (parseInt(prev.ballsBowled)||0) + a.bowlBalls;
+        const oversBowled = ballsBowledTotal > 0 ? (ballsBowledTotal/6) : 0;
+        const runsConcededTotal = (parseInt(prev.runsConceded)||0) + a.bowlRuns;
+        const dotBalls = (parseInt(prev.dotBalls)||0) + a.dots;
+        const maidens = (parseInt(prev.maidens)||0) + a.maidens;
+        const bestWickets = Math.max(parseInt(prev.bestWickets)||0, a.best||0);
+        const strikeRate = totalBallsFaced > 0 ? (totalRuns * 100) / totalBallsFaced : null;
+        const economy = oversBowled > 0 ? (runsConcededTotal / oversBowled) : null;
+
+        const profileUpdates = {
+          totalMatches: increment(1),
+          totalRuns,
+          ballsFaced: totalBallsFaced,
+          fours: totalFours,
+          sixes: totalSixes,
+          highestScore,
+          totalWickets,
+          ballsBowled: ballsBowledTotal,
+          oversBowled,
+          runsConceded: runsConcededTotal,
+          dotBalls,
+          maidens,
+          bestWickets,
+          // Store rounded rates to 2 decimals for display consistency
+          strikeRate: strikeRate != null ? Math.round(strikeRate * 100) / 100 : null,
+          economy: economy != null ? Math.round(economy * 100) / 100 : null,
+        };
+        try {
+          await updateDoc(doc(db, 'playerProfiles', pid), profileUpdates);
+        } catch {
+          try { await setDoc(doc(db, 'playerProfiles', pid), profileUpdates, { merge: true }); } catch {}
+        }
       }
       // Unlock teams in Firestore after match completion
       const t1 = currentMatch?.team1 ? { ...currentMatch.team1, rosterLocked: false } : { rosterLocked: false };
@@ -1166,6 +1294,8 @@ function Umpire() {
     if (!pName.trim()) { setMessage('Error: Player name is required.'); return; }
     const ageNum = parseInt(pAge, 10);
     if (!Number.isFinite(ageNum) || ageNum < 0) { setMessage('Error: Provide a valid age.'); return; }
+    const jerseyNum = parseInt(pJerseyNumber, 10);
+    if (pJerseyNumber && (!Number.isFinite(jerseyNum) || jerseyNum < 0)) { setMessage('Error: Invalid jersey number.'); return; }
     try {
       setLoading(true);
       setMessage('');
@@ -1187,11 +1317,15 @@ function Umpire() {
         wickets: 0,
         strikeRate: 0,
         createdAt: new Date(),
+        // Default 3D model placeholder until a custom one is uploaded
+        modelUrl: '/model.glb',
       };
+      if (Number.isFinite(jerseyNum)) payload.jerseyNumber = jerseyNum;
       if (pStatus === 'unavailable') payload.status = 'unavailable';
       await addDoc(collection(db, 'players'), payload);
       setMessage('Player created successfully.');
   setPName(''); setPAge(''); setPGender('male'); setPAvatar('/Teams/imgImage8.png'); setPStatus('available'); setPRole('batsman'); setPBattingStyle('right-handed');
+      setPJerseyNumber('');
     } catch (e) {
       setMessage('Error creating player: ' + (e?.message || String(e)));
     } finally {
@@ -1222,18 +1356,17 @@ function Umpire() {
     try {
       setTLoading(true);
       let logoToSave = tLogoUrl || '';
-      // If a file was selected but not yet uploaded, upload it now to Firebase Storage
+      // If a file was selected but not yet converted, convert it now.
       if (tLogoFile && !logoToSave) {
         setTUploading(true);
         try {
-          const url = await uploadFile(tLogoFile, tName || 'team', 'team-logos');
-          logoToSave = url || '';
+          const dataUrl = await readImageInline(tLogoFile);
+          logoToSave = dataUrl || '';
           setTLogoUrl(logoToSave);
           try { setTLogoPreview(logoToSave); } catch {}
-          setMessage('Team logo uploaded.');
         } catch (err) {
-          console.error('Team logo upload failed', err);
-          setMessage('Error uploading logo: ' + (err?.message || String(err)));
+          console.error('Team logo read failed', err);
+          setMessage('Error reading logo: ' + (err?.message || String(err)));
         } finally {
           setTUploading(false);
         }
@@ -1371,6 +1504,22 @@ function Umpire() {
             </div>
           </div>
 
+          <div>
+            <label className="block text-sm text-gray-700 mb-1">
+              Google Maps Location <span className="text-gray-500 text-xs">(optional)</span>
+            </label>
+            <input 
+              type="url" 
+              className="w-full border rounded px-3 py-2" 
+              value={venueMapUrl} 
+              onChange={e=>setVenueMapUrl(e.target.value)} 
+              placeholder="https://maps.google.com/?q=..." 
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Paste Google Maps link (will be clickable for users on mobile)
+            </p>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm text-gray-700 mb-1">Total Overs</label>
@@ -1469,9 +1618,8 @@ function Umpire() {
                                     if (!file) return;
                                     try {
                                       try { const local = URL.createObjectURL(file); setTLogoPreview(local); } catch {}
-                                      const url = await uploadFile(file, teName || t.name || 'team', 'team-logos');
-                                      setTeLogoUrl(url);
-                                      setMessage('Team logo uploaded.');
+                                      const dataUrl = await readImageInline(file);
+                                      setTeLogoUrl(dataUrl);
                                     } catch (err) {
                                       setMessage('Error uploading logo: ' + (err?.message || String(err)));
                                     }
@@ -1618,6 +1766,10 @@ function Umpire() {
                       <label className="block text-sm text-gray-700 mb-1">Age</label>
                       <input type="number" min={0} className="w-full border rounded px-3 py-2" value={pAge} onChange={e=>setPAge(e.target.value)} placeholder="Age" required />
                     </div>
+                    <div>
+                      <label className="block text-sm text-gray-700 mb-1">Jersey Number (optional)</label>
+                      <input type="number" min={0} className="w-full border rounded px-3 py-2" value={pJerseyNumber} onChange={e=>setPJerseyNumber(e.target.value)} placeholder="e.g. 18" />
+                    </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
                     <div>
@@ -1651,10 +1803,9 @@ function Umpire() {
                         try {
                           setPUploading(true);
                           try { const localUrl = URL.createObjectURL(file); setPAvatarPreview(localUrl); } catch {}
-                          const url = await uploadFile(file, pName || 'player', 'player-avatars');
-                          setPAvatar(url);
-                          setPAvatarPreview(url);
-                          setMessage('Player photo uploaded.');
+                          const dataUrl = await readImageInline(file);
+                          setPAvatar(dataUrl);
+                          setPAvatarPreview(dataUrl);
                         } catch (err) {
                           setMessage('Error uploading photo: ' + (err?.message || String(err)));
                         } finally {
@@ -1711,6 +1862,9 @@ function Umpire() {
                               <img src={avatar} alt={pl.name} className="w-16 h-16 rounded-full border mb-2 object-cover" />
                               <div className="font-semibold">{pl.name}</div>
                               <div className="text-xs text-gray-500">{pl.gender || 'player'}{pl.age?`, ${pl.age}`:''}</div>
+                              {pl.jerseyNumber != null && pl.jerseyNumber !== '' && (
+                                <div className="text-xs font-semibold text-blue-600 mt-1">#{pl.jerseyNumber}</div>
+                              )}
                               {(pl.role || pl.battingStyle) && (
                                 <div className="text-[11px] text-gray-600 mt-1 capitalize">
                                   {pl.role && <span className="inline-block px-2 py-[2px] rounded-full bg-gray-100 border border-gray-200 mr-1">{pl.role}</span>}
@@ -1743,6 +1897,10 @@ function Umpire() {
                                     <option value="female">Female</option>
                                   </select>
                                 </div>
+                                <div>
+                                  <label className="block text-xs text-gray-600">Jersey #</label>
+                                  <input type="number" className="w-full border rounded px-2 py-1 text-sm" value={epJerseyNumber} onChange={e=>setEpJerseyNumber(e.target.value)} placeholder="e.g. 18" />
+                                </div>
                               </div>
                               <div>
                                 <div className="mt-2 flex items-center gap-2">
@@ -1752,10 +1910,9 @@ function Umpire() {
                                     if (!file) return;
                                     try {
                                       try { const localUrl = URL.createObjectURL(file); setEpAvatarPreview(localUrl); } catch {}
-                                      const url = await uploadFile(file, epName || 'player', 'player-avatars');
-                                      setEpAvatar(url);
-                                      setEpAvatarPreview(url);
-                                      setMessage('Player photo uploaded.');
+                                      const dataUrl = await readImageInline(file);
+                                      setEpAvatar(dataUrl);
+                                      setEpAvatarPreview(dataUrl);
                                     } catch (err) {
                                       setMessage('Error uploading photo: ' + (err?.message || String(err)));
                                     }
@@ -1805,6 +1962,7 @@ function Umpire() {
                                   setEpGender(pl.gender||'male');
                                   setEpAvatar(pl.avatar || (pl.gender==='female'?'/Teams/imgImage48.png':'/Teams/imgImage8.png'));
                                   setEpStatus(pl.status||'available');
+                                  setEpJerseyNumber(String(pl.jerseyNumber || pl.jerseyNo || pl.jersey || ''));
                                   try { setEpRole(pl.role||''); setEpBattingStyle(pl.battingStyle||''); } catch {}
                                 }}>Edit</button>
                                 <button className="bg-red-50 border border-red-300 hover:bg-red-100 text-red-700 px-3 py-2 rounded text-sm" onClick={async()=>{
@@ -1823,6 +1981,10 @@ function Umpire() {
                                     const updates = { name: epName, age: parseInt(epAge)||0, gender: epGender, status: epStatus };
                                     if (typeof epRole === 'string') updates.role = epRole;
                                     if (typeof epBattingStyle === 'string') updates.battingStyle = epBattingStyle;
+                                    if (epJerseyNumber) {
+                                      const jn = parseInt(epJerseyNumber,10);
+                                      if (Number.isFinite(jn)) updates.jerseyNumber = jn; else setMessage('Invalid jersey number (ignored).');
+                                    }
                                     if (avatarVal && !isDefaultAvatar) {
                                       updates.avatar = avatarVal;
                                     } else {
@@ -1982,7 +2144,7 @@ function Umpire() {
                       </div>
                       {tossWinnerSel && (
                         <div className="text-sm text-gray-600 mt-2">
-                          {(tossWinnerSel==='team1'? (currentMatch?.team1?.name||'Team 1') : (currentMatch?.team2?.name||'Team 2'))} won the toss and chose to {tossDecisionSel==='bat'?'bat':'bowl'}.
+                          {(tossWinnerSel==='team1'? (currentMatch?.team1?.name||'Team 1') : (currentMatch?.team2?.name||'Team 2'))} won the toss and choose to {tossDecisionSel==='bat'?'bat':'bowl'} first.
                         </div>
                       )}
                     </div>
@@ -2269,10 +2431,29 @@ function Umpire() {
                           <label className="block text-sm font-medium text-gray-700 mb-1">Man of the Match</label>
                           <select className="w-full border rounded px-3 py-2" value={currentMatch?.awards?.manOfTheMatchId || ''} onChange={async (e)=>{
                             const pid = e.target.value;
-                            const name = [...(team1Roster||[]), ...(team2Roster||[])].find(p=> (p.id||p.playerId)===pid)?.name || '';
+                            const prevId = currentMatch?.awards?.manOfTheMatchId || '';
+                            const rosterCombined = [...(team1Roster||[]), ...(team2Roster||[])];
+                            const name = rosterCombined.find(p=> (p.id||p.playerId)===pid)?.name || '';
                             const awards = { ...(currentMatch?.awards||{}), manOfTheMatchId: pid, manOfTheMatch: name };
                             await updateDoc(doc(db,'matches','current-match'), { awards });
                             if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { awards });
+                            // POTM increment logic: increment new selection; if changed, decrement previous
+                            try {
+                              if (pid && pid !== prevId) {
+                                // increment new player
+                                try { await updateDoc(doc(db,'players', pid), { potmAwards: increment(1) }); } catch {}
+                                try { await updateDoc(doc(db,'playerProfiles', pid), { potmAwards: increment(1) }); } catch {}
+                                // decrement previous player if previously set
+                                if (prevId) {
+                                  try { await updateDoc(doc(db,'players', prevId), { potmAwards: increment(-1) }); } catch {}
+                                  try { await updateDoc(doc(db,'playerProfiles', prevId), { potmAwards: increment(-1) }); } catch {}
+                                }
+                              } else if (!pid && prevId) {
+                                // Clearing selection: revert previous increment
+                                try { await updateDoc(doc(db,'players', prevId), { potmAwards: increment(-1) }); } catch {}
+                                try { await updateDoc(doc(db,'playerProfiles', prevId), { potmAwards: increment(-1) }); } catch {}
+                              }
+                            } catch {}
                             setMessage('Man of the Match saved.');
                             try { window.alert('Man of the Match saved successfully.'); } catch {}
                           }}>

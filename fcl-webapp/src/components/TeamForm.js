@@ -1,7 +1,14 @@
 import React, { useState } from 'react';
 import { db } from '../firebase';
 import { addDoc, collection } from 'firebase/firestore';
-import { uploadImage, buildImagePath } from '../utils/uploadImage';
+// Firebase Storage removed; we now embed images as base64 data URIs in Firestore.
+// Helper to convert File -> data URL
+const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+  reader.readAsDataURL(file);
+});
 
 export default function TeamForm({ onTeamCreated }) {
   const [name, setName] = useState('');
@@ -26,9 +33,14 @@ export default function TeamForm({ onTeamCreated }) {
 
       let finalLogoUrl = logoUrl.trim();
       if (logoFile) {
-        // Upload directly to Firebase Storage
-        const path = buildImagePath('team-logos', name || 'team', logoFile);
-        finalLogoUrl = await uploadImage(logoFile, path, (pct) => setUploadPct(pct));
+        // Convert selected file to base64 and store inline
+        try {
+          finalLogoUrl = await fileToDataUrl(logoFile);
+        } catch (e) {
+          setError('Failed to read image file.');
+          setLoading(false);
+          return;
+        }
       }
       if (!finalLogoUrl) {
         setError('Please upload a logo image or paste a logo URL.');
@@ -96,7 +108,7 @@ export default function TeamForm({ onTeamCreated }) {
               </div>
               {/* Progress is handled server-side; show a simple hint while loading */}
               {loading && logoFile && (
-                <div className="text-xs text-gray-600">Uploading…</div>
+                <div className="text-xs text-gray-600">Saving…</div>
               )}
             </div>
           )}

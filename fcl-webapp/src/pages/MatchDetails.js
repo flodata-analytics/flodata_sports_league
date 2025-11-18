@@ -100,7 +100,20 @@ export default function MatchDetails() {
             <span className="px-3 py-1 rounded-full text-sm bg-gray-100">{match.status}</span>
           </div>
         </div>
-        <div className="text-sm text-gray-600 mt-2">{match.date} • {match.venue}</div>
+        <div className="text-sm text-gray-600 mt-2">
+          {match.date} • {match.venueMapUrl ? (
+            <a 
+              href={match.venueMapUrl} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-blue-600 underline hover:text-blue-800"
+            >
+              <img src="/Location.svg" alt="Location" className="inline-block w-4 h-4 mr-1 align-text-bottom" /> {match.venue || 'View on Map'}
+            </a>
+          ) : (
+            match.venue
+          )}
+        </div>
         {match.result && (
           <div className="mt-3 p-3 rounded bg-green-50 text-green-800 font-semibold">{match.result}</div>
         )}

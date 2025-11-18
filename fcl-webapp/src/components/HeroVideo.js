@@ -3,7 +3,7 @@ import React from 'react';
 export default function HeroVideo({ src = '/Live MAtches-unscreen.gif', className = '' }) {
   return (
     <div
-      className={`w-full rounded-2xl overflow-hidden mb-4 bg-transparent ${className}`}
+      className={`w-5 h-auto rounded-2xl overflow-hidden mb-4 bg-transparent ${className}`}
       style={{ backgroundColor: 'transparent' }}
     >
       <img

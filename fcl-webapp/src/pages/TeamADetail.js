@@ -5,10 +5,10 @@ import { useCollection, useDocument } from '../hooks/useFirestore';
 // Local asset URLs (from /public/teams/)
 const imgImage8 = "/teams/imgImage8.png";
 const imgImage48 = "/teams/imgImage48.png";
-const imgHome = "/teams/imgHome.png";
-const imgPlayersIcon = "/teams/imgPlayersIcon.png";
-const imgFrame590 = "/teams/imgFrame590.png";
-const imgCategory = "/teams/imgCategory.png";
+const imgHome = "/Home Not Selected.svg";
+const imgPlayersIcon = "/Leaderboard Icon Not Selected (1).svg";
+const imgFrame590 = "/Auction Not Selected.svg";
+const imgCategory = "/Video Library Not Selected.svg";
 const imgInjuredPlusIcon = "/teams/imgInjuredPlusIcon.png";
 
 function PlayerCard({ name, role, img, highlight, injured, extra }) {
@@ -111,7 +111,7 @@ export default function TeamADetail() {
         <button onClick={() => setFilter('ar')}><FilterButton label="AR" selected={filter==='ar'} /></button>
       </div>
       {/* Players grid */}
-      <div className="flex flex-row gap-4 justify-center pt-6 pb-[70px] w-full">
+      <div className="flex flex-row 4 justify-center pt-6 pb-[70px] w-full">
         {loading && <div className="text-gray-400 text-center">Loading players...</div>}
         {error && <div className="text-red-500 text-center">Error loading players</div>}
         {filteredPlayers.length === 0 && !loading && !error && <div className="text-gray-400 text-center">No players found</div>}

@@ -3,7 +3,13 @@ import { useAuth } from '../context/AuthContext';
 import { auth, db } from '../firebase';
 import { updateProfile as updateAuthProfile } from 'firebase/auth';
 import { doc, updateDoc } from 'firebase/firestore';
-import { uploadImage, buildImagePath } from '../utils/uploadImage';
+// Firebase Storage removed; user avatars stored inline as base64.
+const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+  reader.readAsDataURL(file);
+});
 
 export default function UserProfile() {
   const { currentUser, userProfile, logout } = useAuth();
@@ -13,7 +19,6 @@ export default function UserProfile() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
 
   if (!currentUser) {
     return (
@@ -39,20 +44,13 @@ export default function UserProfile() {
     try {
       setUploading(true);
       setError('');
-      setUploadProgress(0);
-      
-      const path = buildImagePath('user-avatars', currentUser.uid, file);
-      const url = await uploadImage(file, path, (progress) => {
-        setUploadProgress(progress);
-      });
-      
-      setAvatarUrl(url);
-      setSuccess('Image uploaded! Click Save Changes to update your profile.');
+      const dataUrl = await fileToDataUrl(file);
+      setAvatarUrl(dataUrl);
+      setSuccess('Image ready. Click Save Changes to update your profile.');
     } catch (e) {
       setError(e?.message || String(e));
     } finally {
       setUploading(false);
-      setUploadProgress(0);
     }
   };
 
@@ -100,7 +98,7 @@ export default function UserProfile() {
               <div className="flex gap-2 items-start">
                 <label className="flex-1 cursor-pointer">
                   <div className="w-full px-3 py-2 border rounded-lg bg-gray-50 hover:bg-gray-100 text-center text-sm text-gray-700">
-                    {uploading ? `Uploading... ${uploadProgress}%` : 'Choose Image'}
+                    {uploading ? 'Reading image…' : 'Choose Image'}
                   </div>
                   <input 
                     type="file" 

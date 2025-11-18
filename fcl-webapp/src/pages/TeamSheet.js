@@ -1,40 +1,29 @@
 import React from 'react';
-import TeamLogo from '../components/TeamLogo';
+import { ChevronLeftIcon } from '@heroicons/react/24/outline';
+import { getPlayerAvatar } from '../utils/getPlayerAvatar';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useDocument, useCollection } from '../hooks/useFirestore';
+import VideoLoader from '../components/VideoLoader';
 
 
-function PlayerCard({ p, accent = '#2c60ce', onClick, unavailable = false, teamKey }) {
-  const wk = (p.type || '').toLowerCase().includes('wk') || (p.role || '').toLowerCase().includes('wk');
-  const c = (p.extra || '').toLowerCase().includes('c');
-  // Set bg color based on teamKey
-  const bg = teamKey === 'team1' ? '#E7ECF7' : '#fff';
+function PlayerCard({ p, onClick, unavailable = false, teamKey }) {
+  const avatar = getPlayerAvatar(p);
+  const bg = teamKey === 'team1' ? 'bg-[#e7ecf7]' : 'bg-[#fff7f7]';
+  const ring = teamKey === 'team1' ? 'ring-[#2c60ce]' : 'ring-[#e11922]';
   return (
     <div
-      className={`flex items-center rounded-[16px] border   px-4 py-3 min-h-[68px] cursor-pointer transition-transform hover:scale-[1.02] ${unavailable ? 'opacity-60 pointer-events-none' : ''}`}
+      className={`flex flex-col items-center text-center ${bg} rounded-2xl border border-[#e6eaf2] px-4 py-3 cursor-pointer transition hover:shadow-sm ${unavailable ? 'opacity-60 pointer-events-none' : ''}`}
       onClick={onClick}
-      style={{ background: bg }}
     >
-      <div className="w-14 h-14 rounded-full overflow-hidden flex items-center justify-center bg-gray-100 border border-[#e6eaf2] mr-4">
-        {p.avatar || p.imgUrl ? (
-          <img src={p.avatar || p.imgUrl} alt={p.name} className="object-cover bg-white w-full h-full" />
+      <div className={`w-16 h-16 sm:w-20 sm:h-20 rounded-full overflow-hidden flex items-center justify-center mb-2 ring-2 ${ring} bg-white`}>
+        {avatar ? (
+          <img src={avatar} alt={p.name} className="object-cover w-full h-full" />
         ) : (
           <span className="text-gray-500 font-semibold text-xl">{(p.name||'?')[0]}</span>
         )}
       </div>
-      <div className="flex flex-col flex-1 min-w-0 justify-center">
-        <div className="flex items-center gap-1 flex-wrap">
-          <span className={`font-semibold text-[15px] leading-[22px] tracking-[0.07px] truncate ${wk ? 'text-[#eba747]' : 'text-[#111111]'}`}>{p.name}</span>
-          {c && <span className="inline-flex items-center px-2 py-[2px] rounded-full text-[10px] font-semibold ml-1 bg-[#fff8e1] text-[#e89a2d]">(C)</span>}
-          {wk && <span className="inline-flex items-center px-2 py-[2px] rounded-full text-[10px] font-semibold ml-1 bg-[#e6f7ff] border border-[#eba747] text-[#eba747]">(wk)</span>}
-          {unavailable && (
-            <span className="inline-flex items-center px-2 py-[2px] rounded-full text-[10px] font-semibold ml-1 bg-[#ffe8e8] text-[#d92d20] border border-[#f3d6d6]">Unavailable</span>
-          )}
-        </div>
-        <div className="flex items-center gap-1 mt-0.5">
-          <span className={`font-normal text-[12px] leading-[16px] tracking-[0.05px] ${wk ? 'text-[#eba747]' : 'text-[#9ca4ab]'}`}>{p.type || p.role || 'Player'}</span>
-        </div>
-      </div>
+      <div className="font-semibold text-sm text-gray-900 truncate w-full">{p.name}</div>
+      <div className="text-[11px] text-gray-500 mt-1">{p.role || p.type || 'Player'}</div>
     </div>
   );
 }
@@ -102,17 +91,19 @@ export default function TeamSheet() {
   }, [inningsForTeam]);
 
   // Early returns come AFTER all hooks (including useMemo) to satisfy rules-of-hooks
-  if (loading) return <div className="p-6">Loading team…</div>;
+  if (loading) return <VideoLoader className="py-10" />;
   if (error) return <div className="p-6 text-red-600">{String(error.message || error)}</div>;
   if (!match) return <div className="p-6">Match not found</div>;
 
   return (
-    <div className="bg-[#f8f8f8] min-h-screen relative overflow-y-auto">
-      {/* Header */}
-      <div className="bg-white shadow sticky top-0 w-full z-10">
-        <div className="flex items-center h-16 px-5 justify-between max-w-md mx-auto">
-          <button className="text-[22px] text-[#111111] font-sans" onClick={() => navigate(-1)} aria-label="Back">&#x1F870;</button>
-          <span className="font-bold text-[17px] text-[#111111]">{teamName}</span>
+    <div className="bg-[#f8f8f8] min-h-screen relative overflow-y-auto py-[21px] px-[21px]">
+      {/* Header (fixed at top to occupy navbar space) */}
+      <div className="bg-white shadow fixed top-0 left-0 right-0 w-full z-50">
+        <div className="flex items-center h-16 px-5 max-w-md mx-auto">
+          <button onClick={() => navigate(-1)} aria-label="Back" className="inline-flex items-center justify-center w-9 h-9 rounded-full hover:bg-gray-100 focus:outline-none">
+            <ChevronLeftIcon className="w-6 h-6 text-[#2c60ce]" />
+          </button>
+          <span className="font-semibold text-[17px] text-[#111111] ml-3">Playing XI - {teamName}</span>
           <span style={{ width: 32 }}></span>
         </div>
       </div>
@@ -121,13 +112,13 @@ export default function TeamSheet() {
 
       {/* Body */}
 
-      <div className="pt-6 pb-20 flex justify-center">
-        <div className="max-w-md w-full px-4">
+      <div className="-pt-16 pb-20 flex justify-center">
+        <div className="max-w-3xl w-full -pt-10">
           {(!players.length || !inningsStarted) && (
-            <div className="text-gray-500 text-center w-full mb-2"></div>
+            <div className="text-gray-500 text-center w-full mb-0"></div>
           )}
           {players.length > 0 && (
-            <div className="grid grid-cols-2 gap-x-5 gap-y-5 ">
+            <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 gap-2">
               {players.map((p, idx) => (
                 <PlayerCard
                   key={p.id || p.playerId || idx}

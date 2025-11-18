@@ -12,6 +12,19 @@ export default function TeamLogo({ team = {}, size = 'md', className = '', round
   const name = team?.name || 'Team';
   // Attempt to extract a provided logo URL
   let src = team?.logo || team?.logoUrl || team?.flag || null;
+  // If team name matches one of the confirmed teams, prefer bundled SVG assets
+  try {
+    const nm = String(name || '').toLowerCase();
+    if (!src) {
+      if (nm.includes('geotitan') || nm.includes('geotitans')) {
+        src = '/Teams/GeoTitans Logo.svg';
+      } else if (nm.includes('fintech') || nm.includes('fintech falcon') || nm.includes('fintech falcons')) {
+        src = '/Teams/Fintech Falcons Logo.svg';
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
   // If no image was uploaded, use deterministic fallback: Team1 / Team2 based on optional index or name hash.
   if (!src) {
     // For predictable fallback we examine team.key / id / name to derive a number
@@ -22,10 +35,15 @@ export default function TeamLogo({ team = {}, size = 'md', className = '', round
     src = which === 1 ? '/Team1.png' : '/Team2.png';
   }
 
-  const sizePx = typeof size === 'number' ? size : ({ sm: 32, md: 48, lg: 56 }[size] || 48);
-  const dimClass = `w-[${sizePx}px] h-[${sizePx}px]`;
+  // Allow responsive sizing: if `size` is a number or one of 'sm'|'md'|'lg' we derive fixed px sizes.
+  // If `size` is set to a non-standard value (e.g. 'responsive'), we skip adding fixed width/height
+  // so callers can provide responsive utility classes via `className`.
+  let sizePx = null;
+  if (typeof size === 'number') sizePx = size;
+  else if (['sm','md','lg'].includes(size)) sizePx = ({ sm: 32, md: 48, lg: 56 }[size]);
+  const dimClass = sizePx ? `w-[${sizePx}px] h-[${sizePx}px]` : '';
   const radiusClass = rounded ? 'rounded-full' : 'rounded-md';
-  const baseClass = `${dimClass} ${radiusClass} object-cover border border-[#e6eaf2] bg-white ${className}`.trim();
+  const baseClass = `${dimClass} ${radiusClass} object-cover  bg-white ${className}`.trim();
 
 
   // If src resolved (including fallback), render it; no initials fallback needed because we always have an image now.

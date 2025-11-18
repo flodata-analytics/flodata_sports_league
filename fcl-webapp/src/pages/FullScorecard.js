@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import TeamLogo from '../components/TeamLogo';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useDocument, useCollection } from '../hooks/useFirestore';
 import LiveScoreboard from '../components/LiveScoreboard';
+import FullScoreHeaderCard from '../components/FullScoreHeaderCard';
 import MatchSummaryCard from '../components/MatchSummaryCard';
 import VideoLoader from '../components/VideoLoader';
 import { ChevronLeftIcon } from '@heroicons/react/24/outline';
@@ -10,7 +11,9 @@ import { getPlayerAvatar } from '../utils/getPlayerAvatar';
 
 export default function FullScorecard() {
   const { matchId } = useParams();
+  const navigate = useNavigate();
   const { data: match, loading, error } = useDocument('matches', matchId || 'current-match', { poll: false });
+  const { data: allPlayers } = useCollection('players', 'name');
   const { data: teams } = useCollection('teams', 'name');
   const teamsByName = useMemo(() => {
     const map = new Map();
@@ -54,8 +57,28 @@ export default function FullScorecard() {
       if (!match?.toss?.winner || !match?.toss?.decision) return '';
       const teamName = match.toss.winner === 'team1' ? (match.team1?.name || 'Team 1') : (match.team2?.name || 'Team 2');
       const action = match.toss.decision === 'bat' ? 'bat' : 'bowl';
-      return `${teamName} won the toss and chose to ${action}.`;
+      return `${teamName} won the toss and choose to ${action} first.`;
     } catch { return ''; }
+  })();
+
+  // Chase info (same logic as on Home via LiveScoreboard)
+  const chaseInfo = (() => {
+    try {
+      const inns = Array.isArray(match?.innings) ? match.innings : [];
+      const battingKey = match?.battingTeam === 'team2' ? 'team2' : 'team1';
+      if (!inns.length || !match?.battingTeam) return null;
+      const firstInnings = inns.find(i => i && i.teamKey && i.teamKey !== battingKey) || inns[0];
+      if (!firstInnings || !firstInnings.total) return null;
+      if (firstInnings.teamKey === battingKey) return null; // only show in second innings
+      const target = match?.targetRuns || ((parseInt(firstInnings.total.runs) || 0) + 1);
+      const current = (match?.[battingKey]?.runs) || 0;
+      const need = Math.max(0, target - current);
+      const totalOvers = parseInt(match?.totalOvers) || 20;
+      const ballsBowled = (parseInt(match?.currentOver)||0) * 6 + (parseInt(match?.currentBall)||0);
+      const ballsRemaining = Math.max(0, totalOvers*6 - ballsBowled);
+      const rrr = ballsRemaining > 0 ? (need / (ballsRemaining/6)) : 0;
+      return { battingKey, target, need, ballsRemaining, rrr };
+    } catch { return null; }
   })();
 
   const dateText = (()=>{
@@ -68,42 +91,89 @@ export default function FullScorecard() {
   })();
 
   return (
-    <div className="min-h-screen bg-gray-50 md:py-[1rem] pb-24 md:pb-4">
+    <div className="min-h-screen bg-gray-50  pb-24 md:pb-4">
       {/* Mobile: Full Scorecard title at top, no navbar space */}
       <div className="md:hidden sticky top-0 bg-white shadow-sm z-50 px-4 py-3 flex items-center gap-2">
-        <Link to="/" className="inline-flex items-center justify-center w-9 h-9 rounded-full hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#2c60ce]" aria-label="Back to Home">
+        <button onClick={() => (window.history.length > 1 ? navigate(-1) : navigate('/', { replace: true }))} className="inline-flex items-center justify-center w-9 h-9" aria-label="Back to Home">
           <ChevronLeftIcon className="w-6 h-6 text-[#2c60ce]" />
-        </Link>
-        <h1 className="text-xl font-bold">Full Scorecard</h1>
+        </button>
+        <h1 className="text-xl font-semibold">Full Scorecard</h1>
       </div>
       
       <div className="max-w-2xl mx-auto px-4 md:pt-4">
         {/* Desktop: Full Scorecard title with back button */}
         <div className="hidden md:flex mb-4 items-center gap-2">
-          <Link to="/" className="inline-flex items-center justify-center w-9 h-9 rounded-full hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#2c60ce]" aria-label="Back to Home">
+          <button onClick={() => (window.history.length > 1 ? navigate(-1) : navigate('/', { replace: true }))} className="inline-flex items-center justify-center w-9 h-9 focus:outline-none" aria-label="Back to Home">
             <ChevronLeftIcon className="w-6 h-6 text-[#2c60ce]" />
-          </Link>
+          </button>
           <h1 className="text-2xl font-bold">Full Scorecard</h1>
         </div>
-        {/* Use the same top card as Home */}
+        {/* Full Scorecard top section: Figma replica component */}
         {(['live','break'].includes((match.status||'').toLowerCase())) && (
-          <div className="mb-4">
-            <LiveScoreboard matchId={matchId || 'current-match'} disableLink hideBatBowl showTeamRosters={false} teamsByName={teamsByName} className="-mt-8" />
-          </div>
+          <>
+            <div className="mb-4 mt-4">
+              <FullScoreHeaderCard match={match} teamsByName={teamsByName} />
+            </div>
+            {/* Toss info (reused styling from Home/LiveScoreboard) */}
+            {tossText && (
+              <div className="relative w-full mt-3 md:max-w-2xl">
+                <div className="rounded-[0.7rem] overflow-hidden bg-white mx-auto border border-[#e6eaf2] shadow-sm px-4 py-2 flex items-center justify-center gap-2">
+                  <span className="text-sm text-gray-600">{tossText}</span>
+                </div>
+              </div>
+            )}
+            {/* Chase info (Target / Need / RRR) */}
+            {chaseInfo && (
+              <div className="relative w-full" style={{marginTop:12}}>
+                <div className="bg-white rounded-[0.7rem] shadow p-3 flex items-center justify-between md:max-w-2xl mx-auto">
+                  <div className="text-sm text-gray-800">
+                    Target <span className="font-semibold">{chaseInfo.target}</span>
+                  </div>
+                  <div className="text-sm text-gray-800">
+                    Need <span className="font-semibold">{chaseInfo.need}</span> runs off <span className="font-semibold">{chaseInfo.ballsRemaining}</span> balls
+                  </div>
+                  <div className="text-sm  text-gray-600">RRR <span className='font-semibold text-[#1f2937] '>{chaseInfo.rrr.toFixed(2)}</span> </div>
+                </div>
+              </div>
+            )}
+          </>
         )}
         {(match.status||'').toLowerCase() === 'completed' && (
-          <div className="mb-4">
-            <MatchSummaryCard match={{...match, team1: withLogoByName(match.team1), team2: withLogoByName(match.team2)}} />
+          <div className="">
+            <div className="mt-4 w-full">
+              <FullScoreHeaderCard match={match} teamsByName={teamsByName} />
+            </div>
             {/* Player of the Match — Figma-styled responsive card */}
             {(() => {
               const mom = match?.awards?.manOfTheMatch || match?.awards?.playerOfTheMatch;
               if (!mom) return null;
               const name = typeof mom === 'string' ? mom : (mom?.name || '');
-              const avatar = typeof mom === 'object' ? (mom?.avatar || mom?.photoUrl || '') : '';
+              // Resolve avatar: prefer explicit URL on award object, else try to lookup in team rosters
+              const avatar = (() => {
+                const explicit = (typeof mom === 'object') ? (mom?.avatar || mom?.photoUrl || mom?.photo || '') : '';
+                if (explicit) return explicit;
+                const pid = (typeof mom === 'object') ? (mom.id || mom.playerId || mom.pid || mom.player || null) : null;
+                const pname = name;
+                const teamPlayers = [ ...(match?.team1?.players || []), ...(match?.team2?.players || []) ];
+                if (Array.isArray(teamPlayers) && teamPlayers.length > 0) {
+                  const found = teamPlayers.find(p => (pid && ((p.id && p.id === pid) || (p.playerId && p.playerId === pid))) || (!pid && (p.name === pname || p.playerName === pname)));
+                  if (found) return getPlayerAvatar(found);
+                }
+                if (Array.isArray(allPlayers)) {
+                  const foundDb = allPlayers.find(p => {
+                    if (pid) return (p.id === pid || p.playerId === pid);
+                    const pn = String(p.name || '').trim();
+                    return pn && pname && pn.toLowerCase() === String(pname).toLowerCase();
+                  });
+                  if (foundDb) return getPlayerAvatar(foundDb);
+                }
+                return '';
+              })();
               const team = typeof mom === 'object' ? (mom?.team || '') : '';
               const role = typeof mom === 'object' ? (mom?.role || '') : '';
-              // derive batting/bowling string like "58(43) - 2-20(4,0)"
-              let scoreLine = '';
+              // derive batting/bowling performance strings and not-out star
+              let batText = '';
+              let bowlText = '';
               try {
                 const pid = (typeof mom === 'object') ? (mom.id || mom.playerId || mom.pid || mom.player || null) : null;
                 const pname = name;
@@ -124,21 +194,20 @@ export default function FullScorecard() {
                 if (batEntry) {
                   const br = Number(batEntry.runs) || 0;
                   const bb = Number(batEntry.balls) || 0;
-                  scoreLine = `${br}(${bb})`;
+                  const star = (batEntry.isOut === false || String(batEntry.status||'').toLowerCase().includes('not out')) ? '*' : '';
+                  batText = `${br}${star} (${bb})`;
                 }
                 if (bowlEntry) {
                   const wk = Number(bowlEntry.wickets) || 0;
                   const rc = Number(bowlEntry.runsConceded || bowlEntry.runs || 0) || 0;
                   const balls = Number(bowlEntry.balls) || 0;
                   const overs = `${Math.floor(balls/6)}.${balls%6}`;
-                  const md = (Number(bowlEntry.maidens) || Number(bowlEntry.m) || 0);
-                  const bstr = `${wk}-${rc}(${overs}${md!=null ? ','+md : ''})`;
-                  scoreLine = scoreLine ? `${scoreLine} - ${bstr}` : bstr;
+                  bowlText = `${wk}-${rc} (${overs})`;
                 }
-              } catch (e) { scoreLine = '' }
+              } catch (e) { batText = ''; bowlText = ''; }
               return (
-                <div className="w-full max-w-2xl mx-auto mt-4 mb-2 px-3 sm:px-0">
-                  <div className="bg-[#E7ECF7] rounded-2xl text-black overflow-hidden shadow-lg">
+                <div className="w-full bg-[#E7ECF7] max-w-2xl mx-auto mt-4 mb-2 px-3 sm:px-0 rounded-2xl">
+                  <div className=" text-black overflow-hidden">
                     <div className="flex items-center gap-4 p-4 sm:p-5">
                       <div className="flex-shrink-0">
                         <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full overflow-hidden border-2 border-white bg-white flex items-center justify-center">
@@ -154,11 +223,15 @@ export default function FullScorecard() {
                             <div className="text-lg sm:text-xl font-semibold leading-tight truncate">{name}</div>
                             {team && <div className="text-sm opacity-90 truncate">{team}</div>}
                           {/* optional small badge */}
-                          <div className="text-xs text-gray-500 sm:text-sm bg-white/20 py-1 rounded-full font-semibold">Player of the Match</div>
+                          <div className="text-xs text-gray-500 sm:text-sm  py-1 rounded-full font-semibold">Player of the Match</div>
                         </div>
                         {role && <div className="mt-2 text-sm opacity-90">{role}</div>}
-                        {scoreLine && (
-                          <div className="mt-2 text-sm font-semibold text-gray-800">{scoreLine}</div>
+                        {(batText || bowlText) && (
+                          <div className="mt-2 flex items-center text-sm font-semibold text-gray-800">
+                            {batText && <span>{batText}</span>}
+                            {batText && bowlText && <img src="/Dot.svg" alt="·" className="w-2 h-2 mx-2" />}
+                            {bowlText && <span>{bowlText}</span>}
+                          </div>
                         )}
                         {/* Example stat row (responsive) - adjust if you have stat data */}
                         {mom?.stats && (
@@ -180,28 +253,42 @@ export default function FullScorecard() {
           </div>
         )}
         {(match.status||'').toLowerCase() === 'upcoming' && (
-          <div className="bg-white rounded-[18px] mt-4 w-full max-w-md mx-auto shadow-[0_6px_15px_0_rgba(0,0,0,0.05)] p-0 flex flex-col gap-0 h-[167px] border-2 border-[#2c60ce] mb-4">
-            <div className="flex items-center justify-between px-5 pt-4 pb-1">
-              <span className="text-[#2c60ce] text-[13px] font-semibold">{dateText}</span>
+          <div className="bg-white rounded-[20px] mt-4 w-full max-w-md mx-auto shadow-[0_6px_15px_0_rgba(0,0,0,0.05)] p-4 sm:p-5 flex flex-col gap-3 h-auto sm:h-[200px] md:h-[200px] lg:h-[200px] border-1 mb-4">
+            <div className="flex items-center justify-between px-0">
+              <span className="text-[#4b5563] text-[12px] md:text-[15px] font-regular tracking-wide">{dateText}</span>
+              {match.venueMapUrl ? (
+                <a
+                  href={match.venueMapUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#4b5563] text-[12px] md:text-[13px] font-regular hover:text-[#1a4fb8]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                    <img src="/Location.svg" alt="Location" className="inline-block w-4 h-4 mr-1 align-text-bottom" /> {match.venue || 'View Map'}
+                </a>
+              ) : (
+                <span className="text-[#9ca4ab] text-[12px] md:text-[13px] font-medium truncate max-w-[50%]">{match.venue || ''}</span>
+              )}
+            </div>
+            <div className="border-b border-[#eef2f6] w-full" />
+            <div className="flex items-center justify-between px-0 py-3">
+              <div className="flex flex-col items-center w-[86px] -mt-2 md:-mt-1">
+                <TeamLogo team={{...withLogoByName(match.team1), key:'team1'}} size={40} className="mb-1" />
+                <span className="font-semibold text-base md:text-lg text-[#111] text-center whitespace-nowrap overflow-hidden w-full">{match.team1?.name || 'Team 1'}</span>
+              </div>
+              <div className="flex flex-col justify-center items-center w-[48px]">
+                <span className="text-[#2c60ce] font-bold text-[28px] md:text-[34px] leading-none">v/s</span>
+              </div>
+              <div className="flex flex-col items-center w-[86px] -mt-2 md:-mt-1">
+                <TeamLogo team={{...withLogoByName(match.team2), key:'team2'}} size={40} className="mb-1" />
+                <span className="font-semibold text-base md:text-lg text-[#111] text-center whitespace-nowrap overflow-hidden w-full">{match.team2?.name || 'Team 2'}</span>
+              </div>
+            </div>
+            {/* <div className='border border-gray-50 w-full mx-auto'/> */}
+            {/* <div className="flex items-center justify-between px-0 pb-1 pt-1 text-sm">
               <span className="text-[#9ca4ab] text-[13px] font-medium">{match.time || (match.startTime || match.dateTime || match.date || '').toString().slice(11,16) || '--:--'}</span>
-            </div>
-            <div className="flex items-center justify-between px-5 py-2">
-              <div className="flex flex-col items-center w-[90px]">
-                <TeamLogo team={{...withLogoByName(match.team1), key:'team1'}} size="md" className="mb-1" />
-                <span className="font-semibold text-[13px] text-[#111] text-center truncate w-full">{match.team1?.name || 'Team 1'}</span>
-              </div>
-              <div className="flex flex-col items-center w-[40px]">
-                <span className="text-[#2c60ce] font-bold text-[2rem] mb-1">vs</span>
-              </div>
-              <div className="flex flex-col items-center w-[90px]">
-                <TeamLogo team={{...withLogoByName(match.team2), key:'team2'}} size="md" className="mb-1" />
-                <span className="font-semibold text-[13px] text-[#111] text-center truncate w-full">{match.team2?.name || 'Team 2'}</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-between px-5 pb-4 pt-1">
-              <span className="text-[#9ca4ab] text-[13px] font-medium truncate max-w-[60%]">{match.venue || ''}</span>
               <span className="text-[#2c60ce] text-[13px] font-semibold">Overs: {match.totalOvers || 20}</span>
-            </div>
+            </div> */}
           </div>
         )}
         {/* Last 10 balls activity */}
@@ -350,7 +437,9 @@ export default function FullScorecard() {
                               </div>
                               <div className="flex flex-col min-w-0">
                                 <span className="font-semibold text-sm text-gray-900 truncate">{p.name}</span>
-                                {p.gender && <span className="text-xs text-gray-500">{p.gender}</span>}
+                                {(p.role || p.playerRole || p.specialization) && (
+                                  <span className="text-xs text-gray-500">{p.role || p.playerRole || p.specialization}</span>
+                                )}
                               </div>
                             </div>
                           );})}
@@ -364,13 +453,13 @@ export default function FullScorecard() {
                   <div className="px-4 pb-4">
                     <table className="min-w-full text-xs sm:text-sm border border-[#eef2f6] rounded-lg overflow-hidden mb-2">
                       <thead>
-                        <tr className="bg-[#f7f9fc] text-gray-700">
+                        <tr className="bg-[#f7f9fc] text-left text-gray-700 ">
                           <th className="px-2 py-2 text-left font-semibold">Batsman</th>
-                          <th className="px-2 py-2 font-semibold">R</th>
-                          <th className="px-2 py-2 font-semibold">B</th>
-                          <th className="px-2 py-2 font-semibold">4s</th>
-                          <th className="px-2 py-2 font-semibold">6s</th>
-                          <th className="px-2 py-2 font-semibold">SR</th>
+                          <th className="px-2 py-2 text-left font-semibold">R</th>
+                          <th className="px-2 py-2 text-left font-semibold">B</th>
+                          <th className="px-2 py-2 text-left font-semibold">4s</th>
+                          <th className="px-2 py-2 text-left font-semibold">6s</th>
+                          <th className="px-2 py-2 text-left font-semibold">SR</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#eef2f6]">
@@ -392,11 +481,11 @@ export default function FullScorecard() {
                                 {b.name}
                                 <div className="text-[11px] text-gray-500 font-normal">{getDismissal(b)}</div>
                               </td>
-                              <td className="px-2 py-2 text-center">{b.runs || 0}</td>
-                              <td className="px-2 py-2 text-center">{b.balls || 0}</td>
-                              <td className="px-2 py-2 text-center">{b.fours || 0}</td>
-                              <td className="px-2 py-2 text-center">{b.sixes || 0}</td>
-                              <td className="px-2 py-2 text-center">{(b.balls>0 ? ((b.runs||0)*100/(b.balls||1)) : 0).toFixed(1)}</td>
+                              <td className="px-2 py-2 text-left">{b.runs || 0}</td>
+                              <td className="px-2 py-2 text-left">{b.balls || 0}</td>
+                              <td className="px-2 py-2 text-left">{b.fours || 0}</td>
+                              <td className="px-2 py-2 text-left">{b.sixes || 0}</td>
+                              <td className="px-2 py-2 text-left">{(b.balls>0 ? ((b.runs||0)*100/(b.balls||1)) : 0).toFixed(1)}</td>
                             </tr>
                           ));
                         })()}
@@ -428,7 +517,9 @@ export default function FullScorecard() {
                               </div>
                               <div className="flex flex-col min-w-0">
                                 <span className="font-semibold text-sm text-gray-900 truncate">{p.name}</span>
-                                {p.gender && <span className="text-xs text-gray-500">{p.gender}</span>}
+                                {(p.role || p.playerRole || p.specialization) && (
+                                  <span className="text-xs text-gray-500">{p.role || p.playerRole || p.specialization}</span>
+                                )}
                               </div>
                             </div>
                           );})}
@@ -439,28 +530,28 @@ export default function FullScorecard() {
                     {/* Bowling for this innings */}
                     <div className="mt-4">
                       <h3 className="text-sm font-semibold mb-1">Bowling</h3>
-                      <table className="min-w-full text-xs sm:text-sm border border-[#eef2f6] rounded-lg overflow-hidden mb-2">
+                      <table className="min-w-full text-xs sm:text-sm border border-[#eef2f6] rounded-lg overflow-hidden mb-2 ">
                         <thead>
                           <tr className="bg-[#f7f9fc] text-gray-700">
                             <th className="px-2 py-2 text-left font-semibold">Bowler</th>
-                            <th className="px-2 py-2 font-semibold">O</th>
-                            <th className="px-2 py-2 font-semibold">R</th>
-                            <th className="px-2 py-2 font-semibold">W</th>
-                            <th className="px-2 py-2 font-semibold">4s</th>
-                            <th className="px-2 py-2 font-semibold">6s</th>
-                            <th className="px-2 py-2 font-semibold">Econ</th>
+                            <th className="px-2 py-2 text-left font-semibold">O</th>
+                            <th className="px-2 py-2 text-left font-semibold">R</th>
+                            <th className="px-2 py-2 text-left font-semibold">W</th>
+                            <th className="px-2 py-2 text-left font-semibold">4s</th>
+                            <th className="px-2 py-2 text-left font-semibold">6s</th>
+                            <th className="px-2 py-2 text-left font-semibold">Econ</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[#eef2f6]">
                           {Array.isArray(inn?.bowling) && inn.bowling.map((b, i) => (
                             <tr key={i} className="hover:bg-[#fafcff]">
-                              <td className="px-2 py-2 font-medium">{b.name}</td>
-                              <td className="px-2 py-2 text-center">{Math.floor((b.balls||0)/6) + '.' + ((b.balls||0)%6)}</td>
-                              <td className="px-2 py-2 text-center">{b.runsConceded || 0}</td>
-                              <td className="px-2 py-2 text-center">{b.wickets || 0}</td>
-                              <td className="px-2 py-2 text-center">{b.foursConceded || 0}</td>
-                              <td className="px-2 py-2 text-center">{b.sixesConceded || 0}</td>
-                              <td className="px-2 py-2 text-center">{(() => { const ov = (b.balls||0)/6; return ov>0 ? (b.runsConceded/ov).toFixed(2) : '-'; })()}</td>
+                              <td className="px-2 py-2 text-left font-medium">{b.name}</td>
+                              <td className="px-2 py-2 text-left">{Math.floor((b.balls||0)/6) + '.' + ((b.balls||0)%6)}</td>
+                              <td className="px-2 py-2 text-left">{b.runsConceded || 0}</td>
+                              <td className="px-2 py-2 text-left">{b.wickets || 0}</td>
+                              <td className="px-2 py-2 text-left">{b.foursConceded || 0}</td>
+                              <td className="px-2 py-2 text-left">{b.sixesConceded || 0}</td>
+                              <td className="px-2 py-2 text-left">{(() => { const ov = (b.balls||0)/6; return ov>0 ? (b.runsConceded/ov).toFixed(2) : '-'; })()}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -477,62 +568,75 @@ export default function FullScorecard() {
         {teamsDecided && (
           <div className="w-full max-w-2xl mx-auto mt-6 mb-4">
             <div className="flex flex-col gap-6">
-              {/* Team Blue Roster */}
-              <div className="flex-1 bg-white rounded-2xl shadow-lg p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-[#2c60ce] inline-block"></span>
-                    <h3 className="font-semibold text-lg text-[#2c60ce] tracking-wide">Team Blue</h3>
-                  </div>
-                  <Link
-                    to={`/team-sheet/${matchId || 'current-match'}/team1`}
-                    className="px-3 py-1 text-sm rounded-full border border-[#cfd8ea] text-[#2c60ce] bg-white hover:bg-[#f3f7ff]"
-                  >
-                    See more
-                  </Link>
+              {/* Team Blue — Playing XI */}
+              <div className="flex-1 rounded-2xl">
+                <div className="flex items-center gap-2 mb-3 w-full">
+                  <div className="text-sm sm:text-base font-semibold text-[#2c60ce]">Team Blue</div>
+                  <img src="/Dot.svg" alt="·" className="w-2 h-2" />
+                  <div className="text-sm text-gray-600">Playing XI</div>
                 </div>
                 {Array.isArray(match.team1?.players) && match.team1.players.length > 0 ? (
-                  <div className="flex gap-3 overflow-x-auto no-scrollbar py-1">
-                    {match.team1.players.map((p, idx) => (
-                      <div key={p.id || p.playerId || idx} className={`flex flex-col items-center min-w-[80px] max-w-[90px] bg-[#f7faff] rounded-xl shadow border border-[#e3e8f0] px-3 py-2 mx-1`}>
-                        <div className="w-12 h-12 rounded-full bg-gray-200 overflow-hidden flex items-center justify-center mb-1 border-2 border-[#2c60ce]">
-                          <img src={getPlayerAvatar(p)} alt={p.name} className="w-full h-full object-cover" />
+                  <>
+                    <div className="flex gap-3 overflow-x-auto no-scrollbar pb-2 snap-x snap-mandatory md:grid md:grid-cols-3 lg:grid-cols-4 md:gap-4 md:overflow-visible">
+                      {match.team1.players.map((p, idx) => (
+                        <div
+                          key={p.id || p.playerId || idx}
+                          className="min-w-[134px] min-h-[160px] sm:min-w-[160px] md:min-w-0 flex-shrink-0 pt-6 bg-[#e7ecf7] rounded-2xl border border-[#e3e8f0] px-4 py-2 flex flex-col items-center text-center snap-start"
+                        >
+                          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full overflow-hidden flex items-center justify-center mb-2 ring-2 ring-gray-300 bg-white">
+                            <img src={getPlayerAvatar(p)} alt={p.name} className="w-full h-full object-cover" />
+                          </div>
+                          <div title={p.name} className="font-semibold text-sm sm:text-base text-gray-900 truncate w-full">{((p.name||'').split(' ')[0]) || p.name || 'Player'}</div>
+                          <div className="text-[11px] sm:text-xs text-gray-500 mt-1">{p.role || p.type || p.playerRole || p.specialization || 'Player'}</div>
                         </div>
-                        <span className="font-semibold text-sm text-gray-900 text-center truncate w-full">{p.name}</span>
-                        {p.gender && <span className="text-xs text-[#2c60ce] mt-0.5">{p.gender}</span>}
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                    <div className="mt-3">
+                      <a
+                        href={`/team-sheet/${matchId || 'current-match'}/team1`}
+                        className="block w-full text-center rounded-xl border border-[#cfd8ea] text-[#2c60ce] py-2 hover:bg-[#f3f7ff]"
+                      >
+                        See All
+                      </a>
+                    </div>
+                  </>
                 ) : (
                   <div className="text-sm text-gray-400">Team is not declared yet.</div>
                 )}
               </div>
-              {/* Team White Roster */}
-              <div className="flex-1 bg-white rounded-2xl shadow-lg p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-[#e11922] inline-block"></span>
-                    <h3 className="font-semibold text-lg text-[#e11922] tracking-wide">Team White</h3>
-                  </div>
-                  <Link
-                    to={`/team-sheet/${matchId || 'current-match'}/team2`}
-                    className="px-3 py-1 text-sm rounded-full border border-[#f3d6d6] text-[#e11922] bg-white hover:bg-[#fff0f0]"
-                  >
-                    See more
-                  </Link>
+
+              {/* Team White — Playing XI */}
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="text-sm sm:text-base font-semibold text-[#e11922]">Team White</div>
+                  <img src="/Dot.svg" alt="·" className="w-2 h-2" />
+                  <div className="text-sm text-gray-600">Playing XI</div>
                 </div>
                 {Array.isArray(match.team2?.players) && match.team2.players.length > 0 ? (
-                  <div className="flex gap-3 overflow-x-auto no-scrollbar py-1">
-                    {match.team2.players.map((p, idx) => (
-                      <div key={p.id || p.playerId || idx} className={`flex flex-col items-center min-w-[80px] max-w-[90px] bg-[#fff7f7] rounded-xl shadow border border-[#f3d6d6] px-3 py-2 mx-1`}>
-                        <div className="w-12 h-12 rounded-full bg-gray-200 overflow-hidden flex items-center justify-center mb-1 border-2 border-[#e11922]">
-                          <img src={getPlayerAvatar(p)} alt={p.name} className="w-full h-full object-cover" />
+                  <>
+                    <div className="flex gap-3 overflow-x-auto no-scrollbar pb-2 snap-x snap-mandatory md:grid md:grid-cols-3 lg:grid-cols-4 md:gap-4 md:overflow-visible">
+                      {match.team2.players.map((p, idx) => (
+                        <div
+                          key={p.id || p.playerId || idx}
+                          className="min-w-[134px] min-h-[160px] pt-6 sm:min-w-[160px] md:min-w-0 flex-shrink-0 bg-[#fff7f7] rounded-2xl border border-[#f3d6d6] px-4 py-2 flex flex-col items-center text-center snap-start"
+                        >
+                          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full overflow-hidden flex items-center justify-center mb-2 ring-2 ring-[#e11922] bg-white">
+                            <img src={getPlayerAvatar(p)} alt={p.name} className="w-full h-full object-cover" />
+                          </div>
+                          <div title={p.name} className="font-semibold text-sm sm:text-base text-gray-900 truncate w-full">{((p.name||'').split(' ')[0]) || p.name || 'Player'}</div>
+                          <div className="text-[11px] sm:text-xs text-gray-500 mt-1">{p.role || p.type || p.playerRole || p.specialization || 'Player'}</div>
                         </div>
-                        <span className="font-semibold text-sm text-gray-900 text-center truncate w-full">{p.name}</span>
-                        {p.gender && <span className="text-xs text-[#e11922] mt-0.5">{p.gender}</span>}
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                    <div className="mt-3">
+                      <a
+                        href={`/team-sheet/${matchId || 'current-match'}/team2`}
+                        className="block w-full text-center rounded-xl border border-[#f3d6d6] text-[#e11922] py-2 hover:bg-[#fff0f0]"
+                      >
+                        See All
+                      </a>
+                    </div>
+                  </>
                 ) : (
                   <div className="text-sm text-gray-400">Team is not declared yet.</div>
                 )}

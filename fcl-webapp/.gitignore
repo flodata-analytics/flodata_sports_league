@@ -1,27 +1,233 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# dependencies
-/node_modules
+# =====================================
+# Node.js / npm
+# =====================================
+node_modules/
 /.pnp
 .pnp.js
-
-# testing
-/coverage
-
-# production
-/build
-
-# misc
-.DS_Store
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# server env files
-server/.env
-server/.env.local
-
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# =====================================
+# Testing
+# =====================================
+/coverage
+*.lcov
+.nyc_output
+
+# =====================================
+# Production Build
+# =====================================
+/build
+/dist
+
+# =====================================
+# Environment Variables & Secrets
+# =====================================
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.p8
+*.cer
+*.der
+secrets/
+config/local.json
+config/secrets.json
+
+# Server environment files
+server/.env
+server/.env.local
+
+# API Keys and tokens
+**/api-keys.json
+**/credentials.json
+**/.credentials/
+
+# SSL/TLS certificates
+*.crt
+*.csr
+
+# =====================================
+# Firebase
+# =====================================
+.firebase/
+.firebaserc
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+database-debug.log
+pubsub-debug.log
+functions-debug.log
+
+# Firebase local emulator data
+firebase-export-*/
+firestore-export-*/
+
+# Firebase credentials (IMPORTANT: Never commit!)
+**/serviceAccountKey.json
+**/firebase-adminsdk-*.json
+**/*-firebase-adminsdk-*.json
+**/google-services.json
+**/GoogleService-Info.plist
+.runtimeconfig.json
+
+# =====================================
+# Operating Systems
+# =====================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+ehthumbs.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# =====================================
+# IDEs / Editors
+# =====================================
+
+# VSCode
+.vscode/
+!.vscode/settings.json.example
+!.vscode/extensions.json.example
+*.code-workspace
+
+# IntelliJ IDEA / WebStorm
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+
+# Emacs
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# =====================================
+# Logs
+# =====================================
+logs/
+*.log
+
+# =====================================
+# Caching
+# =====================================
+.npm
+.eslintcache
+.stylelintcache
+.cache/
+.parcel-cache/
+
+# =====================================
+# Expo / React Native
+# =====================================
+.expo/
+.expo-shared/
+*.jks
+*.keystore
+*.mobileprovision
+*.orig.*
+web-build/
+
+# Android/iOS specific
+android/app/google-services.json
+ios/GoogleService-Info.plist
+android/key.properties
+android/app/release/
+android/app/debug/
+ios/Pods/
+*.hprof
+
+# =====================================
+# Temporary & Backup Files
+# =====================================
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*.backup
+*.old
+*_old
+*_backup
+README_old.md
+.gitignore_old
+
+# =====================================
+# Project-specific
+# =====================================
+
+# Trash folder
+__trash__/
+
+# Local server keys
+server/keys/
+server/*.json
+!server/package.json
+
+# User-uploaded assets (if stored locally)
+/public/uploads/
+/public/avatars/
+
+# Database dumps
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+
+# Payment gateway credentials
+**/stripe-*.json
+**/paypal-*.json
+**/razorpay-*.json
+
+# OAuth tokens
+**/oauth-tokens.json
+**/.oauth/
+
+# Session storage
+sessions/
+*.session

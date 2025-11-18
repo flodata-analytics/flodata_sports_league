@@ -7,13 +7,13 @@ import FloCashIcon from './FloCashIcon';
 const Item = ({ to, label, Icon }) => {
   const location = useLocation();
   const active = location.pathname === to;
-  const base = 'flex-1 flex flex-col items-center justify-center py-2 text-xs';
+    const base = 'flex-1 flex flex-col items-center justify-center py-2';
   return (
     <NavLink to={to} className={`${base} ${active ? 'text-white' : 'text-gray-500'}`}>
-      <div className={`w-9 h-9 flex items-center justify-center rounded-full mb-0.5 ${active ? 'bg-brand-primary' : ''}`}>
-        <Icon className={`w-6 h-6 ${active ? 'text-white' : 'text-gray-500'}`} active={active} />
+      <div className={`w-9 h-9 flex items-center justify-center rounded-full mb-0.5 ${active ? '' : ''}`}>
+        <Icon className={`w-5 h-5 ${active ? 'text-white' : 'text-gray-500'}`} active={active} />
       </div>
-      <span className="mt-0.5">{label}</span>
+          <span className={`${active ? 'mt-0.5 text-[14px] md:text-[15px] font-semibold' : 'mt-0.5 text-[12px] md:text-[13px]'}`}>{label}</span>
     </NavLink>
   );
 };
@@ -74,18 +74,20 @@ function AvatarMenu() {
 export default function BottomNav() {
   const { currentUser } = useAuth();
   return (
-    <div className="md:max-w-2xl md:mx-auto  fixed bottom-0 left-0 right-0 bg-[#11151d] hover:text-white  border-t border-gray-200 shadow-sm z-40">
+    <div className="md:max-w-2xl md:mx-auto  fixed bottom-0 left-0 right-0 bg-[#11151d] hover:text-white  shadow-sm z-40">
       <div className="w-full max-w-full mx-auto flex ">
         <Item to="/" label="Home" Icon={(props) => (
-          <img src="/Home.svg" alt="Home" className={`w-6 h-6 ${props?.className||''}`} />
+          <img src={props?.active ? '/Home Selected.svg' : '/Home Not Selected.svg'} alt="Home" className={`w-5 h-5 ${props?.className||''}`} />
         )} />
-        <Item to="/players" label="Players" Icon={UsersIcon} />
+        <Item to="/players" label="Ranking" Icon={(props) => (
+          <img src={props?.active ? '/Leaderboard Icon Selected.svg' : '/Leaderboard Icon Not Selected (1).svg'} alt="Leaderboard" className={`w-5 h-5 ${props?.className||''}`} />
+        )} />
         <Item to="/auction" label="Auction" Icon={FloCashIcon} />
         <Item to="/videos" label="Videos" Icon={(props) => (
-          <img src="/VideoIcon.svg" alt="Videos" className={`w-6 h-6 ${props?.className||''}`} />
+          <img src={props?.active ? '/Video Library Selected.svg' : '/Video Library Not Selected.svg'} alt="Videos" className={`w-6 h-6 ${props?.className||''}`} />
         )} />
         {currentUser && <AvatarMenu />}
-        {!currentUser && <Item to="/login" label="Login" Icon={UserCircleIcon} />}
+        {/* Login removed - use profile/avatar menu when user is authenticated */}
       </div>
     </div>
   );

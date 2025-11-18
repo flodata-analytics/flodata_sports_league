@@ -5,7 +5,7 @@ export default function AuctionPage() {
   return (
     <div
       className="flex flex-col items-center justify-center "
-      style={{ minHeight: 'calc(100vh - 74px - 60px)' }}
+      style={{ minHeight: 'calc(100vh - 150px - 60px)' }}
     >
       <div className="w-full flex flex-col items-center justify-center max-w-md px-4">
         <img

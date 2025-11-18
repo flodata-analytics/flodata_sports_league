@@ -3,6 +3,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Techno Race italic-like display font (fallbacks included). If you have the font file, load via @font-face. */
+.font-techno-race {
+  font-family: 'Techno Race', 'Racing Sans One', 'Orbitron', 'Teko', system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* Tight kerning for jersey numbers */
+.jersey-kerning {
+  letter-spacing: -4px;
+}
+
 @layer base {
   body {
     @apply bg-gray-50 text-gray-900 overflow-x-hidden w-full;

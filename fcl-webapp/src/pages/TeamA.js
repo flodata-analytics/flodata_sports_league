@@ -3,10 +3,10 @@ import React from "react";
 // Local asset URLs (from /public/teams/)
 const imgImage8 = "/teams/imgImage8.png";
 const imgImage48 = "/teams/imgImage48.png";
-const imgHome = "/teams/imgHome.png";
-const imgPlayersIcon = "/teams/imgPlayersIcon.png";
-const imgFrame590 = "/teams/imgFrame590.png";
-const imgCategory = "/teams/imgCategory.png";
+const imgHome = "/Home Not Selected.svg";
+const imgPlayersIcon = "/Leaderboard Icon Not Selected (1).svg";
+const imgFrame590 = "/Auction Not Selected.svg";
+const imgCategory = "/Video Library Not Selected.svg";
 const imgInjuredPlusIcon = "/teams/imgInjuredPlusIcon.png";
 
 function PlayerCard({ name, role, img, highlight, injured, extra }) {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useDocument, useCollection } from '../hooks/useFirestore';
 import { useAuth } from '../context/AuthContext';
 import CelebrationOverlay from './CelebrationOverlay';
@@ -22,6 +22,13 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
   const { data: allPlayers } = useCollection('players', 'name');
   const navigate = useNavigate();
   const { userProfile } = useAuth();
+  const location = useLocation();
+  const isFullScorecardRoute = String(location.pathname || '').startsWith('/scorecard');
+  // Full-scorecard layout constants (adjustable to match Figma)
+  // Logo: 40px on mobile (w-10 = 2.5rem = 40px), larger on md
+  const FULL_LOGO_CLASSES = 'w-10 h-10 md:w-14 md:h-14';
+  // Card min-height: tuned for Figma proportions (responsive)
+  const FULL_CARD_HEIGHT_CLASSES = 'min-h-[180px] md:min-h-[220px]';
   const [celeEvent, setCeleEvent] = useState(null);
   const prevLastBallRef = useRef(null);
   const [openTeamModal, setOpenTeamModal] = useState(null); // 'team1' | 'team2' | null
@@ -51,7 +58,22 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
     const last = match.recentBalls[match.recentBalls.length - 1];
     const prev = prevLastBallRef.current;
     prevLastBallRef.current = last;
-  if (last === prev) return;
+    if (last === prev) return;
+
+    // Create unique event ID using matchId + ball index to track shown celebrations
+    const eventId = `${matchId}_${match.recentBalls.length - 1}_${last}`;
+    const shownKey = 'celebrationsShown';
+    
+    // Check if this event was already shown
+    try {
+      const shown = JSON.parse(localStorage.getItem(shownKey) || '[]');
+      if (shown.includes(eventId)) return; // Already shown, skip
+      
+      // Add to shown list and store (keep only last 50 events to avoid bloat)
+      shown.push(eventId);
+      if (shown.length > 50) shown.shift();
+      localStorage.setItem(shownKey, JSON.stringify(shown));
+    } catch {}
 
     const normHowOut = () => {
       // Prefer explicit lastWicket info if present
@@ -85,7 +107,7 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
       const sub = (map.find(([k]) => h.includes(k)) || [null, 'default'])[1];
       setCeleEvent({ kind: 'wicket', subkind: sub });
     }
-  }, [match]);
+  }, [match, matchId]);
 
   // Allow other parts of the app to trigger a special celebration
   useEffect(() => {
@@ -96,6 +118,19 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
     };
     window.addEventListener('celebrate', handler);
     return () => window.removeEventListener('celebrate', handler);
+  }, []);
+
+  // Inject blink CSS for live/start dot if not present (keeps behavior consistent with FullScoreHeaderCard)
+  React.useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (document.getElementById('fs-blink-style')) return;
+    const s = document.createElement('style');
+    s.id = 'fs-blink-style';
+    s.innerHTML = `
+      @keyframes fs-blink { 0% { opacity: 1 } 50% { opacity: 0.25 } 100% { opacity: 1 } }
+      .fs-blink { animation: fs-blink 1.4s linear infinite; display: inline-block; }
+    `;
+    document.head.appendChild(s);
   }, []);
 
   // Hooks must run before any early returns
@@ -129,7 +164,7 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
   };
 
   if (loading) {
-    return <VideoLoader className="h-64" />;
+    return <VideoLoader />;
   }
 
   if (error) {
@@ -160,7 +195,7 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
       if (!match?.toss?.winner || !match?.toss?.decision) return '';
       const teamName = match.toss.winner === 'team1' ? (match.team1?.name || 'Team 1') : (match.team2?.name || 'Team 2');
       const action = match.toss.decision === 'bat' ? 'bat' : 'bowl';
-      return `${teamName} won the toss and chose to ${action}.`;
+      return `${teamName} won the toss and choose to ${action} first.`;
     } catch { return ''; }
   })();
 
@@ -293,6 +328,13 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
   return (
     <div className={`w-full flex flex-col items-center ${className || ''}`}>
       {showCelebration && <CelebrationOverlay event={celeEvent} onDone={() => setCeleEvent(null)} />}
+      {match?.isSuperOver && (
+        <div className="w-full md:max-w-2xl mb-2">
+          <div className="mx-auto bg-gradient-to-r from-[#ff512f] to-[#dd2476] text-white font-semibold tracking-wide rounded-lg shadow px-4 py-2 text-center text-sm md:text-base animate-pulse">
+            SUPER OVER IN PROGRESS
+          </div>
+        </div>
+      )}
       {/* Result and Awards */}
       {/* {match.status === 'completed' && (
         <div className="w-full max-w-xs sm:max-w-md md:max-w-lg lg:max-w-xl xl:max-w-2xl mt-4">
@@ -303,8 +345,8 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
         </div>
       )} */}
       {/* Scorecard Card */}
-        <div className="relative w-full md:max-w-2xl " style={{marginTop:48}}>
-          <div className={`bg-[#fefefe] mx-auto rounded-[17.664px] shadow-[0_6px_15px_0_rgba(0,0,0,0.05)] h-[195px] flex items-center justify-center w-full overflow-clip ${disableLink ? '' : 'cursor-pointer'}`}
+        <div className="relative w-full md:max-w-2xl " style={{marginTop: isFullScorecardRoute ? 0 : 48}}>
+          <div className={`relative bg-[#fefefe] mx-auto ${isFullScorecardRoute ? 'rounded-[20px] border border-[#e6eaf2]' : 'rounded-[17.664px]'} shadow-[0_6px_15px_0_rgba(0,0,0,0.05)] ${isFullScorecardRoute ? FULL_CARD_HEIGHT_CLASSES + ' px-0 py-0' : 'h-[195px]'} flex ${isFullScorecardRoute ? 'items-start justify-start' : 'items-center justify-center'} w-full overflow-clip ${disableLink ? '' : 'cursor-pointer'}`}
             onClick={disableLink ? undefined : () => navigate(`/scorecard/${matchId || 'current-match'}`)}>
           {/* Live badge or Starting Soon - Figma exact: overlap top border, centered */}
           {(() => {
@@ -329,37 +371,73 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
             const showSoon = (!isLive && String(match?.status||'').toLowerCase()==='upcoming' && isToday);
             if (!(isLive || showSoon)) return null;
             return (
-              <div className="absolute left-1/2 -top-3 z-20 flex items-center justify-center" style={{transform:'translateX(-50%)'}}>
+              <div className="absolute left-1/2 -top-1 z-20 flex items-center justify-center" style={{transform:'translateX(-50%)'}}>
                 {isLive ? (
                   <div className="relative flex items-center justify-center" style={{width:80, height:32}}>
-                    <img src="/LiveBg.svg" alt="Live" className="absolute top-2 left-0 w-full h-full" />
-                    <span className="flex items-center  mt-3 justify-center w-full h-full text-white font-semibold text-[16px] relative z-10">
-                      <span className="text-center mr-1 text-white text-[18px]" style={{lineHeight:'0'}}>&bull;</span>Live
+                    <img src="/LiveBg.svg" alt="Live" className="absolute top-0 left-1 w-full h-full" />
+                    <span className="flex items-center justify-center w-full h-full mt-0 text-white font-semibold text-[16px] relative z-10">
+                      <span className="text-center mr-1 text-white text-[18px] fs-blink" style={{lineHeight:'0'}}>&bull;</span>Live
                     </span>
                   </div>
                 ) : (
-                  <div className="bg-[#2c60ce] text-[#fefefe] rounded-full px-3 py-1 flex items-center gap-1 text-[14px] font-medium shadow-lg border-4 border-[#fefefe]" style={{minWidth:64,height:28}}>
-                    Starting Soon
+                  <div className="bg-gray-100 text-gray-700 rounded-full px-3 py-1 flex items-center gap-1 text-[14px] font-medium shadow border border-gray-200" style={{minWidth:64,height:28}}>
+                    <span className="text-center mr-1 text-gray-700 text-[14px] fs-blink" style={{lineHeight:'0'}}>&bull;</span>Starting soon...
                   </div>
                 )}
               </div>
             );
           })()}
-          <div className='bg-white w-full h-auto '>
-          <div className="flex items-center justify-center gap-4 w-full max-w-md mx-auto">
+          {/* Date & Venue inside the live card (top-left date, top-right venue) */}
+          <div className="absolute  top-3 left-5 right-4 z-10 flex items-center justify-between pointer-events-none">
+            <span className="text-[12px] md:text-[15px] font-regular tracking-wide text-[#4b5563]">{(() => {
+                try {
+                  const d = match?.date;
+                  if (!d) return '';
+                  let ts = 0;
+                  if (typeof d === 'number') ts = d;
+                  else if (typeof d === 'string') { const p = Date.parse(d); ts = isNaN(p) ? 0 : p; }
+                  else if (typeof d === 'object') { if (typeof d.seconds === 'number') ts = d.seconds*1000; else if (d.toDate) { try { ts = d.toDate().getTime(); } catch(e){ ts = 0; } } }
+                  if (!ts) return '';
+                  const dt = new Date(ts); const day = dt.getDate(); const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; const mon = monthNames[dt.getMonth()]||''; const yr = dt.getFullYear(); return `${day} ${mon} ${yr}`;
+                } catch(e) { return ''; }
+              })()}</span>
+            <div className="pointer-events-auto -pt-2 ">
+              {match?.venueMapUrl ? (
+                <a href={match.venueMapUrl} target="_blank" rel="noopener noreferrer" className="text-[12px]  md:text-[15px] font-regular tracking-wide text-[#4b5563] hover:text-[#1a4fb8] bg-white/0 px-1 py-0.5 rounded" onClick={(e) => e.stopPropagation()}>
+                  <img src="/Location.svg" alt="Location" className="inline-block w-4 h-4 mr-1 align-text-bottom" /> {match.venue || 'View Map'}
+                </a>
+              ) : (
+                <span className="text-[12px] md:text-[15px] font-medium tracking-wide text-[#4b5563] truncate max-w-[50%]">{match?.venue || ''}</span>
+              )}
+
+
+
+              {/* <div className='w-full border border-gray-100 mx-auto'/> */}
+            </div>
+          </div>
+          <div className={`bg-white w-full h-auto ${isFullScorecardRoute ? 'pt-6 md:pt-8' : ''}`}>
+            {/* Divider under date/venue to match upcoming card */}
+            <div className={`${isFullScorecardRoute ? 'mt-9 -mb-2' : 'mt-7 -mb-5'}  w-full border-t border-gray-100 mx-auto md:mx-5`}></div>
+
+          <div className={`flex ${isFullScorecardRoute ? 'items-start justify-between px-5 md:px-6' : 'items-center justify-center'} gap-8 w-full ${isFullScorecardRoute ? '' : 'max-w-md mx-auto'}`}>
+
             {/* Team A */}
-            <div className="flex flex-col items-center w-1/3 min-w-[80px] gap-2">
-              <TeamLogo team={{...withLogoByName(match.team1), key:'team1'}} size={56} className="rounded-full" />
-              <div className="flex flex-col items-start gap-2 w-full">
-                <p className="font-medium text-[#111] text-[16px] leading-[24.3px] w-full text-center">{match.team1?.name || 'Team A'}</p>
+            <div className={`flex flex-col items-center w-[90px] ${isFullScorecardRoute ? 'mt-0' : 'mt-6'} gap-1 mb-2`}>
+              <TeamLogo
+                team={{...withLogoByName(match.team1), key:'team1'}}
+                size={isFullScorecardRoute ? 'responsive' : 'sm'}
+                className={`mb-1 ${isFullScorecardRoute ? `mt-0 ${FULL_LOGO_CLASSES}` : 'mt-4'}`}
+              />
+              <div className="flex flex-col items-start gap-0 w-full">
+                <p className={`${isFullScorecardRoute ? 'font-semibold text-lg md:text-xl' : 'font-semibold text-[14px] md:text-[15px]'} text-[#111] w-full text-center truncate`}>{match.team1?.name || 'Team A'}</p>
                 <div className="flex items-center gap-1 justify-center w-full">
-                  <div className="flex items-center gap-1 whitespace-nowrap">
-                    <span className="font-medium text-[#111] text-[16px] ml-5">{match.team1?.runs || 0}/{match.team1?.wickets || 0}</span>
-                    <span className="font-normal text-[#9ca4ab] text-[14px] flex items-center">({teamOvers('team1')} ov)
+                  <div className="flex items-center mb-4 gap-1 whitespace-nowrap">
+                    <span className={`${isFullScorecardRoute ? 'text-[#2c60ce] font-semibold text-[16px] md:text-[32px]' : 'text-[#2c60ce] font-semibold text-[16px]'}`}>{match.team1?.runs || 0}/{match.team1?.wickets || 0}</span>
+                    <span className={`${isFullScorecardRoute ? 'text-[#9ca4ab] text-sm md:text-base' : 'text-[#9ca4ab] text-[13px] md:text-[13px]'} flex items-center`}>({teamOvers('team1')} ov)
                       {showResult ? (
                         <img src="./trophy.svg" alt="trophy" className="w-[14px] h-[14px] ml-1 inline-block align-middle" />
                       ) : (match.battingTeam === 'team1' && (
-                        <img src={imgCricketBat011} alt="bat" className="w-[14px] h-[14px] ml-1 inline-block align-middle" />
+                        <img src={imgCricketBat011} alt="bat" className="w-[18px] h-[18px] ml-1 inline-block align-middle" />
                       ))}
                     </span>
                   </div>
@@ -367,22 +445,26 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
               </div>
             </div>
             {/* V/S */}
-            <div className="flex flex-col items-center justify-center w-1/4 min-w-[60px] h-10">
-              <p className="font-bold text-[#2c60ce] text-[20px] leading-none">V/S</p>
+            <div className={`flex flex-col items-center justify-center ${isFullScorecardRoute ? 'w-auto flex-1' : 'w-1/4 min-w-[60px] h-10'} ${(!isFullScorecardRoute && String(match?.status||'').toLowerCase() === 'upcoming') ? 'mt-[50%]' : ''}`}>
+              <p className={`${isFullScorecardRoute ? 'font-bold text-[#2c60ce] text-[40px] md:text-[48px] leading-none' : 'font-bold text-[#2c60ce] text-[24px] leading-none'}`}>V/S</p>
             </div>
             {/* Team B */}
-            <div className="flex flex-col items-center w-1/3 min-w-[80px] gap-2">
-              <TeamLogo team={{...withLogoByName(match.team2), key:'team2'}} size={56} className="rounded-full" />
-              <div className="flex flex-col items-start gap-2 w-full">
-                <p className="font-medium text-[#111] text-[16px] leading-[24.3px] w-full text-center">{match.team2?.name || 'Team B'}</p>
+            <div className={`flex flex-col items-center w-[90px] gap-1 mb-2 ${isFullScorecardRoute ? 'mt-0' : 'mt-6'}`}>
+              <TeamLogo
+                team={{...withLogoByName(match.team2), key:'team2'}}
+                size={isFullScorecardRoute ? 'responsive' : 'sm'}
+                className={`mb-1 ${isFullScorecardRoute ? `mt-0 ${FULL_LOGO_CLASSES}` : 'mt-4'}`}
+              />
+              <div className="flex flex-col items-start gap-0 w-full">
+                <p className={`${isFullScorecardRoute ? 'font-semibold text-lg md:text-xl' : 'font-semibold text-[14px] md:text-[15px]'} text-[#111] w-full text-center truncate`}>{match.team2?.name || 'Team B'}</p>
                 <div className="flex items-center gap-1 justify-center w-full">
-                  <div className="flex items-center gap-1 whitespace-nowrap">
-                    <span className="font-medium text-[#111] text-[16px]">{match.team2?.runs || 0}/{match.team2?.wickets || 0}</span>
-                    <span className="font-normal text-[#9ca4ab] text-[14px] flex items-center">({teamOvers('team2')} ov)
+                  <div className="mb-2 flex items-center gap-1 whitespace-nowrap">
+                    <span className={`${isFullScorecardRoute ? 'text-[#2c60ce] font-semibold text-[16px] md:text-[32px]' : 'text-[#2c60ce] font-medium text-[16px]'}`}>{match.team2?.runs || 0}/{match.team2?.wickets || 0}</span>
+                    <span className={`${isFullScorecardRoute ? 'text-[#9ca4ab] text-sm md:text-base' : 'text-[#9ca4ab] text-[13px] md:text-[14px]'} flex items-center`}>({teamOvers('team2')} ov)
                       {showResult ? (
                         <img src="/trophy.svg" alt="trophy" className="w-[14px] h-[14px] ml-1 inline-block align-middle" />
                       ) : (match.battingTeam === 'team2' && (
-                        <img src={imgCricketBat011} alt="bat" className="w-[14px] h-[14px] ml-1 inline-block align-middle" />
+                        <img src={imgCricketBat011} alt="bat" className="w-[18px] h-[18px] ml-1 inline-block align-middle" />
                       ))}
                     </span>
                   </div>
@@ -416,15 +498,15 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
 
   {/* Chase Info */}
   {chaseInfo && (
-        <div className="relative w-full" style={{marginTop:16}}>
-          <div className="bg-white rounded-lg shadow p-3 flex items-center justify-between">
+        <div className="relative w-full" style={{marginTop:12}}>
+          <div className="bg-white rounded-[0.7rem] shadow p-3 flex items-center justify-between md:max-w-2xl mx-auto">
             <div className="text-sm text-gray-800">
               Target <span className="font-semibold">{chaseInfo.target}</span>
             </div>
             <div className="text-sm text-gray-800">
-              Need <span className="font-semibold">{chaseInfo.need}</span> off <span className="font-semibold">{chaseInfo.ballsRemaining}</span> balls
+              Need <span className="font-semibold">{chaseInfo.need}</span> runs off <span className="font-semibold">{chaseInfo.ballsRemaining}</span> balls
             </div>
-            <div className="text-sm text-gray-600">RRR {chaseInfo.rrr.toFixed(2)}</div>
+            <div className="text-sm  text-gray-600">RRR <span className='font-semibold text-[#1f2937] '>{chaseInfo.rrr.toFixed(2)}</span> </div>
           </div>
         </div>
       )}
@@ -435,33 +517,59 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
   {!hideBatBowl && inningsStarted && (
         <div className="relative w-full md:max-w-2xl" style={{marginTop:32}}>
           <div className="flex items-center justify-between w-full  mx-auto h-6 mb-0">
-            <span className="font-medium text-[18px] text-black">Batsman</span>
+            <span className="font-medium text-[16px] text-black">Batsman</span>
             <button
               type="button"
-              onClick={() => navigate(`/team-sheet/${matchId || 'current-match'}/${(match.battingTeam === 'team2') ? 'team2' : 'team1'}`)}
+              onClick={(e) => { e.stopPropagation(); navigate(`/scorecard/${matchId || 'current-match'}`); }}
               className="flex items-center group"
             >
-              <span className="font-normal text-[#888] text-[16px] group-hover:underline">See more</span>
+              <span className="font-normal text-[#888] text-[14px] group-hover:underline">See more</span>
               <span className="flex items-center ml-1" style={{transform:'rotate(90deg)'}}>
                 <img src={imgIconamoonArrowUp2Thin} alt="arrow" className="w-[24px] h-[18px]" />
               </span>
             </button>
           </div>
           <div
-            className="bg-[#fefefe] rounded-[17.664px] shadow-[0_6px_15px_0_rgba(0,0,0,0.05)] p-4 mt-4 flex flex-col gap-2 w-full max-w-md mx-auto cursor-pointer"
-            onClick={() => navigate(`/team-sheet/${matchId || 'current-match'}/${(match.battingTeam === 'team2') ? 'team2' : 'team1'}`)}
+            className="bg-[#fefefe] rounded-[17.664px] shadow-[0_6px_15px_0_rgba(0,0,0,0.05)] p-4 mt-4 flex flex-col gap-2 w-full max-w-md mx-auto cursor-pointer md:max-w-2xl"
+            onClick={() => navigate(`/scorecard/${matchId || 'current-match'}`)}
           >
             <div className="flex flex-col gap-[20px] w-full">
               {[currentBatStats.striker, currentBatStats.non].filter(Boolean).map((p, idx) => {
                 const isStriker = idx === 0;
+                // Resolve avatar from players collection when possible
+                const resolveAvatar = (pl) => {
+                  try {
+                    if (!pl) return imgFrame571;
+                    // If object already looks like a full player with avatar/gender
+                    if (pl.avatar || pl.gender || pl.id || pl.playerId) return getPlayerAvatar(pl);
+                    // Otherwise try to find by name in allPlayers
+                    if (Array.isArray(allPlayers)) {
+                      const found = allPlayers.find(x => (x.name || '').toString().trim().toLowerCase() === (pl.name || '').toString().trim().toLowerCase());
+                      if (found) return getPlayerAvatar(found);
+                    }
+                    return imgFrame571;
+                  } catch { return imgFrame571; }
+                };
+
+                const avatarSrc = resolveAvatar(p);
+
                 return (
                   <div key={idx} className="flex items-center justify-between w-full">
                     <div className="flex items-center gap-[15px]">
                       <div className="w-10 h-10 rounded-full overflow-hidden bg-[#bbbbbb] flex items-center justify-center">
-                        <img src={imgFrame571} alt={p.name} className="w-full h-full object-cover rounded-full" />
+                        <img src={avatarSrc} alt={p.name} className="w-full h-full object-cover rounded-full" />
                       </div>
                       <div className="flex flex-col items-start w-20">
-                        <p className="font-medium text-[#111] text-[16px] leading-[24.3px] w-full whitespace-nowrap">{p.name}</p>
+                        <p className="font-medium text-[#111] text-[16px] leading-[24.3px] w-full whitespace-nowrap">{(() => {
+                          try {
+                            if (Array.isArray(allPlayers)) {
+                              const found = allPlayers.find(x => (x.name||'').toLowerCase() === (p.name||'').toLowerCase());
+                              const jn = found?.jerseyNumber || found?.jerseyNo || found?.jersey;
+                              return jn ? ` ${p.name}` : p.name;
+                            }
+                          } catch {}
+                          return p.name;
+                        })()}</p>
                         <p className="font-normal text-[#9ca4ab] text-[12px] leading-[17.7px] w-full">All-Rounder</p>
                       </div>
                     </div>
@@ -481,19 +589,19 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
       {!hideBatBowl && (
         <div className="relative w-full max-w-2xl" style={{marginTop:32}}>
           <div className="max-w-2xl flex items-center justify-between w-full  mx-auto h-6 mb-0">
-            <span className="font-medium  text-[18px] text-black">Bowler</span>
+            <span className="font-medium  text-[16px] text-black">Bowler</span>
             <button
               type="button"
-              onClick={() => navigate(`/team-sheet/${matchId || 'current-match'}/${(match.battingTeam === 'team2') ? 'team1' : 'team2'}`)}
+              onClick={(e) => { e.stopPropagation(); navigate(`/scorecard/${matchId || 'current-match'}`); }}
               className="flex items-center group"
             >
-              <span className="font-normal text-[#888] text-[16px] group-hover:underline">See more</span>
+              <span className="font-normal text-[#888] text-[14px] group-hover:underline">See more</span>
               <span className=" flex items-center ml-1" style={{transform:'rotate(90deg)'}}>
                 <img src={imgIconamoonArrowUp2Thin} alt="arrow" className="w-[24px] h-[18px]" />
               </span>
             </button>
           </div>
-          <div className="bg-[#fefefe] rounded-[17.664px] shadow-[0_6px_15px_0_rgba(0,0,0,0.05)] p-4 mt-4 flex flex-col gap-4 w-full max-w-md mx-auto">
+          <div className="bg-[#fefefe] rounded-[17.664px] shadow-[0_6px_15px_0_rgba(0,0,0,0.05)] p-4 mt-4 flex flex-col gap-4 w-full max-w-md mx-auto md:max-w-2xl" onClick={() => navigate(`/scorecard/${matchId || 'current-match'}`)}>
             {!inningsStarted ? (
               <div className="w-full flex items-center justify-center py-4">
                 <p className="text-center text-gray-400 text-base sm:text-lg md:text-xl">Inning is about to start.</p>
@@ -504,10 +612,29 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
                 <div className="flex items-center justify-between w-full">
                   <div className="flex items-center gap-[15px]">
                     <div className="w-10 h-10 rounded-full overflow-hidden bg-[#bbbbbb] flex items-center justify-center">
-                      <img src={imgFrame571} alt={currentBowlerStats.name} className="w-full h-full object-cover rounded-full" />
+                      {(() => {
+                        try {
+                          // try to find bowler in players collection by name
+                          let avatar = imgFrame571;
+                          if (Array.isArray(allPlayers)) {
+                            const found = allPlayers.find(x => (x.name||'').toString().trim().toLowerCase() === (currentBowlerStats.name||'').toString().trim().toLowerCase());
+                            if (found) avatar = getPlayerAvatar(found);
+                          }
+                          return <img src={avatar} alt={currentBowlerStats.name} className="w-full h-full object-cover rounded-full" />;
+                        } catch { return <img src={imgFrame571} alt={currentBowlerStats.name} className="w-full h-full object-cover rounded-full" />; }
+                      })()}
                     </div>
                     <div className="flex flex-col items-start w-20">
-                      <p className="whitespace-nowrap font-medium text-[#111] text-[16px] leading-[24.3px] w-full">{currentBowlerStats.name}</p>
+                      <p className="whitespace-nowrap font-medium text-[#111] text-[16px] leading-[24.3px] w-full">{(() => {
+                        try {
+                          if (Array.isArray(allPlayers)) {
+                            const found = allPlayers.find(x => (x.name||'').toLowerCase() === (currentBowlerStats.name||'').toLowerCase());
+                            const jn = found?.jerseyNumber || found?.jerseyNo || found?.jersey;
+                            return jn ? `#${jn} ${currentBowlerStats.name}` : currentBowlerStats.name;
+                          }
+                        } catch {}
+                        return currentBowlerStats.name;
+                      })()}</p>
                       <p className="font-normal text-[#9ca4ab] text-[12px] leading-[17.7px] w-full">Bowler</p>
                     </div>
                   </div>
@@ -556,9 +683,9 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
                           } else if (b === '0' || b === '•' || b === '.') value = '•';
 
                           // Color scheme per outcome
-                          const base = 'rounded-full h-6 sm:h-11 px-1 sm:px-2 min-w-[1.5rem] sm:min-w-[2.75rem] flex items-center justify-center border';
+                          const base = 'rounded-full h-[1.7rem] sm:h-11 px-1 sm:px-2 min-w-[1.7rem] sm:min-w-[2.75rem] flex items-center justify-center border';
                           let className = 'bg-white border-[#e6eaf2]';
-                          let textClass = 'text-[#111]';
+                          let textClass = 'text-[#111] text-[20px]';
                           const s = String(raw);
                           if (s === '6') { className = 'bg-[#418019] border-[#37780e]'; textClass = 'text-white'; }
                           else if (s === '4') { className = 'bg-[#3290ac] border-[#177f9f]'; textClass = 'text-[#ffff]'; }
@@ -570,7 +697,7 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
 
                           return (
                             <div key={i} className={`${base} ${className}`}>
-                              <span className={`font-semibold text-[10px] sm:text-base leading-none whitespace-nowrap ${textClass}`}>{value}</span>
+                              <span className={`font-semibold text-[16px] sm:text-base leading-none whitespace-nowrap ${textClass}`}>{value}</span>
                             </div>
                           );
                         });

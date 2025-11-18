@@ -25,7 +25,7 @@ export default function MatchSummaryCard({ match }) {
     <div className="bg-white rounded-2xl shadow p-4 mt-4">
       <div className="flex items-center justify-between">
         <div className="flex flex-col items-center w-2/5">
-          <TeamLogo team={{...match.team1, key:'team1'}} size="md" />
+          <TeamLogo team={{...match.team1, key:'team1'}} size="sm" />
           <div className="mt-2 text-sm text-gray-700 font-medium truncate max-w-[140px] text-center">{match.team1?.name || 'Team A'}</div>
           <div className="mt-1 text-xl font-bold">{match.team1?.runs || 0}/{match.team1?.wickets || 0}</div>
           <div className="text-xs text-gray-500">({teamOvers('team1')} ov)</div>
@@ -34,7 +34,7 @@ export default function MatchSummaryCard({ match }) {
           <span className="text-gray-400 font-semibold">V/S</span>
         </div>
         <div className="flex flex-col items-center w-2/5">
-          <TeamLogo team={{...match.team2, key:'team2'}} size="md" />
+          <TeamLogo team={{...match.team2, key:'team2'}} size="sm" />
           <div className="mt-2 text-sm text-gray-700 font-medium truncate max-w-[140px] text-center">{match.team2?.name || 'Team B'}</div>
           <div className="mt-1 text-xl font-bold">{match.team2?.runs || 0}/{match.team2?.wickets || 0}</div>
           <div className="text-xs text-gray-500">({teamOvers('team2')} ov)</div>

@@ -32,12 +32,15 @@ function AppContent() {
   const location = useLocation();
   // Disable top/bottom padding when viewing FullScorecard pages
   const isFullScore = location.pathname && location.pathname.startsWith('/scorecard');
-  const wrapperClass = isFullScore ? 'App overflow-x-hidden w-full' : 'App pb-24 md:pb-0 pt-16 overflow-x-hidden w-full';
-  const wrapperStyle = isFullScore ? {} : { paddingTop: 'calc(env(safe-area-inset-top, 0px) + 4rem)' };
+  const isPlayerProfile = location.pathname && (location.pathname.startsWith('/player/') || location.pathname.startsWith('/players/'));
+  const showNavbar = !isPlayerProfile; // hide navbar on player profile pages
+  const needsTopPadding = showNavbar && !isFullScore;
+  const wrapperClass = needsTopPadding ? 'App pb-24 md:pb-0 pt-16 overflow-x-hidden w-full' : 'App overflow-x-hidden w-full';
+  const wrapperStyle = needsTopPadding ? { paddingTop: 'calc(env(safe-area-inset-top, 0px) + 4rem)' } : {};
 
   return (
     <div className={wrapperClass} style={wrapperStyle}>{/* top padding for fixed navbar; bottom padding on mobile only so content not hidden behind tab bar */}
-      <Navbar />
+      {showNavbar && <Navbar />}
       <ErrorBoundary>
         <Routes>
           <Route path="/" element={<Home />} />

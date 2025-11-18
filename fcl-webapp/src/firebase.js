@@ -1,6 +1,5 @@
 // Firebase configuration
 import { initializeApp } from 'firebase/app';
-import { getStorage, connectStorageEmulator } from 'firebase/storage';
 import { getAuth, connectAuthEmulator } from 'firebase/auth';
 import { initializeFirestore, connectFirestoreEmulator, setLogLevel } from 'firebase/firestore';
 // Firestore Lite (REST-based) for read operations in restricted networks
@@ -14,6 +13,7 @@ const firebaseConfig = {
   projectId: "flodata-tournaments",
   // Storage bucket should use the appspot.com domain, not firebasestorage.app
   // firebasestorage.app is used for download URLs, not the bucket name
+  // storageBucket retained only as part of original config; Storage not used anymore
   storageBucket: "flodata-tournaments.appspot.com",
   messagingSenderId: "555922157691",
   appId: "1:555922157691:web:11b1b3d0012b4d11def2de",
@@ -25,8 +25,7 @@ const app = initializeApp(firebaseConfig);
 // Initialize Firebase Authentication and get a reference to the service
 export const auth = getAuth(app);
 
-// Initialize Cloud Storage
-export const storage = getStorage(app);
+// Cloud Storage removed – avatars/logos now stored inline (base64) in Firestore documents.
 
 // Initialize Cloud Firestore and get a reference to the service
 // Use long polling/fetch stream fallbacks to avoid WebChannel 400 errors in restricted networks
@@ -61,10 +60,6 @@ if (process.env.REACT_APP_USE_FIREBASE_EMULATORS === 'true') {
   try {
     // Firestore emulator
     connectFirestoreEmulator(db, '127.0.0.1', 8080);
-  } catch {}
-  try {
-    // Storage emulator
-    connectStorageEmulator(storage, '127.0.0.1', 9199);
   } catch {}
 }
 

@@ -6,13 +6,15 @@ import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { getPlayerAvatar } from '../utils/getPlayerAvatar';
+import PlayerModelViewer from '../components/PlayerModelViewer';
 import { calculateDream11Points, playerDocToStats } from '../utils/dream11Points';
+import { ChevronLeftIcon } from '@heroicons/react/24/outline';
 
 function Stat({ label, value, highlight = false }) {
   return (
     <div className={`p-3 sm:p-4 rounded-xl ${highlight ? 'bg-[#f3f7ff] border border-[#cfd8ea]' : 'bg-white border border-[#e6eaf2]'} shadow-sm`}>
-      <div className="text-xs sm:text-sm text-[#8a93a0]">{label}</div>
-      <div className={`text-xl sm:text-2xl font-extrabold ${highlight ? 'text-[#2c60ce]' : 'text-[#111]'}`}>{value}</div>
+      <div className="text-xs text-[#8a93a0]">{label}</div>
+      <div className="text-md sm:text-2xl font-normal text-[#111]">{value}</div>
     </div>
   );
 }
@@ -94,8 +96,18 @@ export default function PlayerProfile() {
   const matches = num(profile?.totalMatches ?? player?.matches);
   const runs = num(profile?.totalRuns ?? player?.runs);
   const wickets = num(profile?.totalWickets ?? player?.wickets);
-  const strikeRate = num(profile?.strikeRate ?? player?.strikeRate);
-  const economy = Number.isFinite(profile?.economy ?? player?.economy) ? (profile?.economy ?? player?.economy) : null;
+  let strikeRate = Number.isFinite(profile?.strikeRate ?? player?.strikeRate) ? (profile?.strikeRate ?? player?.strikeRate) : null;
+  let economy = Number.isFinite(profile?.economy ?? player?.economy) ? (profile?.economy ?? player?.economy) : null;
+  // Fallback derive rates if not set explicitly
+  const ballsFacedAgg = num(profile?.ballsFaced ?? player?.ballsFaced);
+  const ballsBowledAgg = num(profile?.ballsBowled ?? player?.ballsBowled);
+  if (strikeRate == null && ballsFacedAgg > 0) {
+    strikeRate = Math.round(((runs * 100) / ballsFacedAgg) * 100) / 100;
+  }
+  if (economy == null && ballsBowledAgg > 0) {
+    const overs = ballsBowledAgg / 6;
+    economy = Math.round(((num(profile?.runsConceded ?? player?.runsConceded) / overs)) * 100) / 100;
+  }
   const highestScore = num(profile?.highestScore ?? profile?.highScore ?? player?.highestScore ?? player?.highScore ?? player?.hs);
   const bestWickets = num(profile?.bestWickets ?? profile?.highWicket ?? player?.bestWickets ?? player?.highWicket ?? player?.best);
   const avatar = getPlayerAvatar(player) || getPlayerAvatar(profile);
@@ -107,13 +119,7 @@ export default function PlayerProfile() {
 
   return (
     <div className="min-h-screen bg-[#f8f8f8]">
-      <div className="max-w-5xl mx-auto  pb-10">
-        <button className=" mb-0 text-white bg-[#2c60ce] w-full  hover:opacity-80 flex items-center gap-2" onClick={() => navigate(-1)} aria-label="Back">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6 mt-2">
-            <path d="m15 18-6-6 6-6" />
-          </svg>
-          <span className="font-semibold mt-2 text-white">Back</span>
-        </button>
+      <div className="max-w-5xl mx-auto pb-10 bg-white">
 
         {/* Hero: blue-white gradient with avatar and name */}
         {/* <div
@@ -164,13 +170,31 @@ export default function PlayerProfile() {
             background: "linear-gradient(to bottom, #2C60CE 0%, #13306F 100%)",
           }}
         >
+          {/* Back button */}
+          <button
+            onClick={() => navigate(-1)}
+            aria-label="Back"
+            className="absolute top-3 left-3 sm:top-4 sm:left-4 inline-flex items-center justify-center text-white  z-10"
+          >
+            <ChevronLeftIcon className="w-6 h-6" />Back
+          </button>
           {/* Container for content */}
           <div className="h-[180px] sm:h-[200px] relative flex justify-between items-end px-5 pb-3">
+            {/* Jersey number watermark behind the avatar */}
+            {(() => {
+              const j = (player?.jerseyNumber ?? player?.jerseyNo ?? player?.jersey ?? profile?.jerseyNumber ?? profile?.jerseyNo ?? null);
+              if (!j && j !== 0) return null;
+              return (
+                <div className="absolute right-1 -top-6 z-0 sm:right-8 sm:top-4 pointer-events-none select-none">
+                  <div className="font-techno-race italic jersey-kerning text-white/20 leading-none text-[194px] sm:text-[96px]">{j}</div>
+                </div>
+              );
+            })()}
             {/* Player Name - Bottom Left */}
             <div className="text-white">
               {/* If player.name has full name, split it for style */}
-              <div className="flex items-center gap-2">
-                <h2 className="text-lg sm:text-xl font-extrabold leading-tight">
+              <div className="flex items-center gap-[-15px]">
+                <h2 className="text-lg sm:text-xl font-semibold leading-tight">
                   {player?.name}
                 </h2>
                 {rankBadgeSrc && (
@@ -189,7 +213,7 @@ export default function PlayerProfile() {
               <div className="mt-2 flex flex-col gap-1">
                 <div className="flex flex-wrap gap-2">
             <div className={`border w-20 text-center rounded-2xl ${rankBadge.className} shadow`}>Rank {myRank ? `${myRank}` : '-'}</div>
-              <div className="text-white  border w-20 text-center rounded-2xl">Points: {Math.round(myPoints)}</div>
+              <div className="text-white w-20 text-[16px]  bg-[#2c60ce] text-center rounded-2xl">Points: {Math.round(myPoints)}</div>
           {/* </div> */}
                 </div>
 
@@ -202,13 +226,9 @@ export default function PlayerProfile() {
               </div>
             </div>
 
-            {/* Avatar - Bottom Right */}
-            <div className="w-[10rem] h-[10rem] sm:w-28 sm:h-28 shrink-0 mb-[-10px]">
-              <img
-                src={avatar}
-                alt={player.name}
-                className="w-full h-full object-cover rounded-full shadow-lg"
-              />
+            {/* 3D Model / Avatar - Bottom Right */}
+            <div className="w-[10rem] h-[10rem] sm:w-28 sm:h-28 shrink-0 mb-[-10px] relative z-10">
+              <PlayerModelViewer modelUrl={player?.modelUrl || '/model.glb'} poster={avatar} alt={`3D model of ${player?.name || 'player'}`} />
             </div>
           </div>
 
@@ -232,30 +252,64 @@ export default function PlayerProfile() {
             </div>
           )}
         </div>
-        {/* Rank + Personal Info */}
-        <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
-         
-          <div className="bg-[#fefefe] rounded-[16px] shadow-[0_6px_15px_0_rgba(0,0,0,0.05)] p-4 sm:p-6 lg:col-span-2 border border-[#eef2f6]">
-            <div className="flex items-center justify-between mb-3">
-              <span className="font-semibold text-[18px] text-[#111]">Personal Info</span>
-              <div className="flex gap-2">
-                {/* {role && <span className="text-xs px-2 py-1 rounded-full bg-[#2c60ce]/10 text-[#2c60ce] border border-[#2c60ce]/20 capitalize">{role}</span>} */}
-                {/* {battingStyle && <span className="text-xs px-2 py-1 rounded-full bg-[#13306F]/10 text-[#13306F] border border-[#13306F]/20 capitalize">{battingStyle}</span>} */}
-              </div>
+        {/* Personal Info */}
+        {/* <div className="mt-6"> */}
+          <div className="mt-6 p-4 sm:p-6]">
+            <div className="flex items-center gap-2 mb-4">
+              <img src="/Icon.svg" alt="Personal Info" className="w-6 h-6" />
+              <span className="font-norma text-[18px]">Personal Info</span>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-              <div><div className="text-xs text-[#8a93a0]">Age</div><div className="font-semibold text-[#111]">{player?.age ?? '—'}</div></div>
-              <div><div className="text-xs text-[#8a93a0]">Gender</div><div className="font-semibold text-[#111] capitalize">{player?.gender ?? '—'}</div></div>
-              {/* <div><div className="text-xs text-[#8a93a0]">Team</div><div className="font-semibold text-[#111]">{team}</div></div> */}
-              <div><div className="text-xs text-[#8a93a0]">Batting Style</div><div className="font-semibold text-[#111] capitalize">{battingStyle || '—'}</div></div>
-            </div>
+            {(() => {
+              const display = (v) => (v !== undefined && v !== null && String(v).trim() !== '' ? v : '—');
+              const genderText = (player?.gender || profile?.gender) ? String(player?.gender || profile?.gender) : '—';
+              const jerseyNo = (player?.jerseyNumber ?? player?.jerseyNo ?? player?.jersey ?? profile?.jerseyNumber ?? profile?.jerseyNo ?? '—');
+              const bowlingStyle = (player?.bowlingStyle || profile?.bowlingStyle || '').replace(/-/g,' ').trim();
+              const potmAwards = (() => {
+                const v = (profile?.potmAwards ?? player?.potmAwards ?? (player?.awards && player.awards.potm) ?? (profile?.awards && profile.awards.potm));
+                return Number.isFinite(v) ? v : (v ? v : 0);
+              })();
+              return (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-white border border-[#e6eaf2] rounded-xl shadow-sm p-4">
+                    <div className="text-xs text-[#8a93a0]">Age</div>
+                    <div className="text-md sm:text-2xl font-normal text-[#111]">{display(player?.age)}</div>
+                  </div>
+                  <div className="p-3 sm:p-4 rounded-xl bg-white border border-[#e6eaf2] shadow-sm">
+                    <div className="text-xs text-[#8a93a0]">Gender</div>
+                    <div className="text-md sm:text-2xl font-normal text-[#111] capitalize">{display(genderText)}</div>
+                    
+                  </div>
+                  <div className="bg-white border border-[#e6eaf2] rounded-xl shadow-sm p-4">
+                    <div className="text-xs text-[#8a93a0]">Jersey No</div>
+                    <div className="text-md sm:text-2xl font-normal text-[#111]">{display(jerseyNo)}</div>
+                  </div>
+                  <div className="bg-white border border-[#e6eaf2] rounded-xl shadow-sm p-4">
+                    <div className="text-xs text-[#8a93a0]">Role</div>
+                    <div className="text-md sm:text-2xl font-normal text-[#111]">{display(role)}</div>
+                  </div>
+                  <div className="bg-white border border-[#e6eaf2] rounded-xl shadow-sm p-4">
+                    <div className="text-xs text-[#8a93a0]">Batting Style</div>
+                    <div className="text-md sm:text-2xl font-normal text-[#111]">{display(battingStyle)}</div>
+                  </div>
+                  <div className="bg-white border border-[#e6eaf2] rounded-xl shadow-sm p-4">
+                    <div className="text-xs text-[#8a93a0]">Bowling Style</div>
+                    <div className="text-md sm:text-2xl font-normal text-[#111]">{display(bowlingStyle)}</div>
+                  </div>
+                  <div className="bg-white border border-[#e6eaf2] rounded-xl shadow-sm p-4">
+                    <div className="text-xs text-[#8a93a0]">POTM Awards</div>
+                    <div className="text-md sm:text-2xl font-normal text-[#111]">{display(potmAwards)}</div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
-        </div>
+        {/* </div> */}
 
         {/* Batting Stats */}
-        <div className="mt-4 bg-white rounded-[16px] border border-[#eef2f6] shadow-sm p-4 sm:p-6">
-          <div className="flex items-center justify-between mb-3 sm:mb-4">
-            <span className="font-semibold text-[18px] text-[#111]">Batting Stats</span>
+        <div className="mt-2 bg-white p-4 sm:p-6">
+          <div className="flex items-center gap-2 mb-3 sm:mb-4">
+            <img src="/Bat Tilted.svg" alt="Batting" className="w-6 h-6" />
+            <span className="font-normal text-[18px] text-[#111]">Batting Stats</span>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <Stat label="Matches" value={matches} />
@@ -268,9 +322,10 @@ export default function PlayerProfile() {
         </div>
 
         {/* Bowling Stats */}
-        <div className="mt-4 bg-white rounded-[16px] border border-[#eef2f6] shadow-sm p-4 sm:p-6">
-          <div className="flex items-center justify-between mb-3 sm:mb-4">
-            <span className="font-semibold text-[18px] text-[#111]">Bowling Stats</span>
+        <div className="mt-2 bg-white p-4 sm:p-6">
+          <div className="flex items-center gap-2 mb-3 sm:mb-4">
+            <img src="/BowlIcon.svg" alt="Bowling" className="w-6 h-6" />
+            <span className="font-normal text-[18px] text-[#111]">Bowling Stats</span>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <Stat label="Matches" value={matches} />
