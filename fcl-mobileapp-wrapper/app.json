@@ -1,10 +1,10 @@
 {
   "expo": {
     "name": "FCL 2025",
-    "slug": "fcl-2025",
+    "slug": "fcl2025-local-20260121",
     "version": "1.0.0",
     "orientation": "portrait",
-  "icon": "./assets/images/FCL APK Logo ( 512 X 512 px ).png",
+    "icon": "./assets/images/FCL APK Logo ( 512 X 512 px ) Sm.png",
     "scheme": "fclapk",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -65,8 +65,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "9de6d3a1-da86-4268-8ab4-5eb5f86d1874"
+        "projectId": "0db9e9a3-a895-4cdf-981d-a1c93939841f"
       }
-    }
+    },
+    "owner": "fcl2025"
   }
 }

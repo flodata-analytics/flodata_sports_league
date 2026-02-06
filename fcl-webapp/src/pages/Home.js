@@ -8,6 +8,8 @@ import VideoLoader from '../components/VideoLoader';
 // import FanPollCard from '../components/FanPollCard';
 import MatchSummaryCard from '../components/MatchSummaryCard';
 import { useCollection, useDocument } from '../hooks/useFirestore';
+import { Clock4 } from 'lucide-react';
+
 
 function Home() {
   const { currentUser, userProfile, makeUserAdmin } = useAuth();
@@ -108,13 +110,27 @@ function Home() {
     return map;
   }, [teams]);
 
+  const getBundledLogoForName = (raw) => {
+    try {
+      const nm = String(raw || '').toLowerCase();
+      const norm = nm.replace(/[^a-z0-9]/g, '');
+      if (norm.includes('dataninjas')) return '/Teams/Data Ninjas Final (1).png';
+      if (norm.includes('fintechfalcons') || norm.includes('fintech')) return '/Teams/Fintech Falcons Final (3).png';
+      // Handle many common variants and typos for Geo Titans
+      if (norm.includes('geotitans')) return '/Teams/Geo Titans Final (1).png';
+      // ML Mavericks
+      if (norm.includes('mlmaverics') || norm.includes('mlmavericks')) return '/Teams/ML Mavericks Final (1).png';
+    } catch {}
+    return '';
+  };
+
   const withLogoByName = (team) => {
     try {
       if (!team) return team;
       if (team.logoUrl || team.logo || team.flag) return team;
       const nm = (team.name || '').trim().toLowerCase();
       if (!nm) return team;
-      const url = teamsByName.get(nm);
+      const url = teamsByName.get(nm) || getBundledLogoForName(nm);
       return url ? { ...team, logoUrl: url } : team;
     } catch { return team; }
   };
@@ -270,8 +286,6 @@ function Home() {
     }
   };
 
-  
-
   return (
     <div className="min-h-screen bg-gray-50 py-4">
       <div className="w-full max-w-full md:max-w-2xl mx-auto px-4">
@@ -321,18 +335,19 @@ function Home() {
               const loadingAny = (matchesLoading || upcomingAllLoading || completedAllLoading);
               const shadowIsLive = ['live','break'].includes(((shadowMatch||{}).status||'').toLowerCase());
               const shadowRealIsLive = ['live','break'].includes(((shadowReal||{}).status||'').toLowerCase());
-              const hasLive = (groups.live.length > 0) || (shadowIsLive && shadowRealIsLive);
+              // Treat shadow live alone as enough to suppress the empty state while real doc catches up
+              const hasLive = (groups.live.length > 0) || shadowIsLive;
               const hasToday = !!(groups.__extras && groups.__extras.upcomingToday && groups.__extras.upcomingToday.length > 0);
               const showLiveHeroVideo = !loadingAny && !hasLive;
               return (
                 <>
                   {showLiveHeroVideo && (
                     <div className="min-h-[70vh] flex flex-col items-center justify-center">
-                      <HeroVideo className="md:max-w-md w-[80%]" />
-                      <div className="-mt-4 inline-block  px-4 py-2">
-                        <span className="text-gray-700 text-lg md:text-xl font-semibold">No match is live currently.</span>
+                      <img src="/Live-MAtches.gif" alt="No live matches" className="md:max-w-md w-[80%] h-auto object-contain" />
+                      <div className="-mt-2 inline-block px-4 py-2">
+                        <span className="text-gray-700 text-lg md:text-xl font-semibold">No live match available.</span>
                       </div>
-                      <p className="text-center -mt-4 py-4 text-gray-500 text-[14px]">Explore Upcoming Matches.</p>
+                      <p className="text-center -mt-3 py-2 text-gray-500 text-[14px]">Explore Upcoming Matches.</p>
                     </div>
                   )}
                 </>
@@ -354,7 +369,7 @@ function Home() {
                 </div>
               ))}
               {/* Fallback: if no live real docs, show the shadow current match */}
-              {groups.live.length === 0 && shadowMatch && ['live','break'].includes((shadowMatch.status||'').toLowerCase()) && shadowReal && ['live','break'].includes((shadowReal.status||'').toLowerCase()) && (
+              {groups.live.length === 0 && shadowMatch && ['live','break'].includes((shadowMatch.status||'').toLowerCase()) && (
                 <div key={shadowMatch.id || 'current-match'}>
                   <div className="home-live-card">
                     <LiveScoreboard matchId={shadowMatch.id || 'current-match'} teamsByName={teamsByName} />
@@ -376,7 +391,7 @@ function Home() {
             {!matchesLoading && groups.upcoming.length === 0 && (
               <div className="text-center  text-lg py-10 flex items-center h-[70vh] justify-center text-gray-600">No upcoming matches yet.</div>
             )}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 py-14 gap-5 md:gap-6 w-full">
+            <div className="grid grid-cols-1 md:flex md:flex-col lg:grid-cols-3 py-14 gap-5 md:gap-6 w-full">
               {groups.upcoming.map(m => {
                 // Compute toss text
                 const tossText = (() => {
@@ -398,6 +413,18 @@ function Home() {
                   className="relative bg-white rounded-[20px] shadow-[0_6px_24px_0_rgba(44,96,206,0.10)] border border-[#e6eaf2] p-0 flex flex-col w-full h-full transition-all duration-200"
                   style={{ minHeight: 180 }}
                 >
+                  {/* Match Number Badge */}
+                  {m.matchNumber && (
+                    <div className="absolute left-1/2 -top-3 z-30 flex items-center justify-center" style={{transform:'translateX(-50%)'}}>
+                      <span className={`px-3 py-1 rounded-full text-xs font-semibold shadow-sm ${
+                        m.isFinalMatch 
+                          ? 'bg-yellow-100 text-yellow-800 border border-yellow-300' 
+                          : 'bg-purple-100 text-purple-700 border border-purple-200'
+                      }`}>
+                        {m.isFinalMatch ? '🏆 FINAL' : `Match #${m.matchNumber}`}
+                      </span>
+                    </div>
+                  )}
                   {/* Top-centered Starting soon badge (matches Live badge position) */}
                   {(() => {
                     try {
@@ -442,27 +469,28 @@ function Home() {
                   <div className="flex items-center justify-between px-5 md:px-6 pt-4 md:pt-5 pb-2 md:pb-3">
                     <span className="text-[12px] md:text-[15px] font-regular tracking-wide text-[#4b5563]">{formatCardDate(m.date)}</span>
                     {m.venueMapUrl ? (
-                      <a 
-                        href={m.venueMapUrl} 
-                        target="_blank" 
+                      <a
+                        href={m.venueMapUrl}
+                        target="_blank"
                         rel="noopener noreferrer"
-                        className="text-[12px] md:text-[15px] font-regular tracking-wide  text-[#4b5563] hover:text-[#1a4fb8]"
-                        onClick={(e) => e.stopPropagation()}
+                        className="inline-flex items-center gap-2 bg-[#f3f6fb] border border-gray-100 shadow-sm px-3 py-1 rounded-md text-[12px] md:text-[15px] text-[#4b5563] hover:text-[#1a4fb8]"
+                        onClick={(e) => { e.stopPropagation(); }}
                       >
-                        <img src="/Location.svg" alt="Location" className="inline-block w-4 h-4 mr-1 align-text-bottom" /> {m.venue || 'View Map'}
+                        <img src="/locationIcon.svg" alt="Location" className="w-4 h-4" />
+                        <span className="truncate max-w-[160px]   text-[#2c60ce] text-[12px]">{m.venue || 'View Map'}</span>
                       </a>
                     ) : (
-                      <span className="text-[12px] md:text-[15px] font-medium tracking-wide text-[#4b5563] truncate max-w-[50%]">{m.venue || ''}</span>
+                      <div className="inline-flex items-center gap-2 bg-[#f3f6fb] border border-gray-100 shadow-sm px-3 py-1 rounded-md text-[12px] md:text-[15px] text-[#4b5563]">
+                        <img src="/locationIcon.svg" alt="Location" className="w-4 h-4" />
+                        <span className="truncate max-w-[160px] text-[#2c60ce] text-[12px]">{m.venue || ''}</span>
+                      </div>
                     )}
                   </div>
                     <div className="border-b border-[#eef2f6] px-4 w-[92%] mx-auto" />
-
-                  
-
                   {/* Teams Row - Figma style */}
                   <div className="flex items-center justify-between px-5 md:px-6 py-3 md:py-4">
                     {/* Team 1 */}
-                    <div className="flex flex-col items-center w-[90px] max-w-[60%]">
+                    <div className="flex flex-col items-center w-[100px] max-w-[60%]">
                       <TeamLogo team={{...withLogoByName(m.team1), key:'team1'}} size="sm" className="mb-2" />
                       <span className="font-semibold text-[14px] md:text-[15px] text-[#111] text-center truncate w-full">{m.team1?.name || 'Team 1'}</span>
                       {team1Locked && (
@@ -474,9 +502,9 @@ function Home() {
                       <span className="text-[#2c60ce] font-bold text-[27px] md:text-[18px] mb-2">v/s</span>
                     </div>
                     {/* Team 2 */}
-                    <div className="flex flex-col items-center w-[90px]">
+                    <div className="flex flex-col items-center w-[100px]">
                       <TeamLogo team={{...withLogoByName(m.team2), key:'team2'}} size="sm" className="mb-2" />
-                      <span className="font-semibold text-[14px] md:text-[15px] text-[#111] text-center truncate w-full">{m.team2?.name || 'Team 2'}</span>
+                      <span className="font-semibold text-[14px] md:text-[15px] text-[#111] text-center  w-full">{m.team2?.name || 'Team 2'}</span>
                       {team2Locked && (
                         <span className="text-[10px] text-green-600 font-medium mt-1">✓ Locked</span>
                       )}
@@ -495,10 +523,49 @@ function Home() {
                   )}
                   
                   {/* Footer: Time & Overs */}
-                  {/* <div className="flex items-center justify-between px-5 md:px-6 pb-4 md:pb-5 pt-2 md:pt-3"> */}
-                    {/* <span className="text-[#9ca4ab] text-[13px] md:text-[14px] font-semibold">{m.time || (m.startTime || m.dateTime || m.date || '').toString().slice(11,16) || '--:--'}</span> */}
-                    {/* <span className="text-[#2c60ce] text-[13px] md:text-[14px] font-bold">Overs: {m.totalOvers || 20}</span> */}
-                  {/* </div> */}
+                  <div className="flex items-center justify-between px-5 md:px-6 pb-4 md:pb-5 pt-2 md:pt-3">
+                    {/* Display Match Start Time in AM/PM format */}
+                    <span className="text-[#4b5563] text-[12px] md:text-[14px] font-normal flex items-center">
+                      {(() => {
+                        try {
+                          let display = 'Time: TBD';
+                          const startTime = m.startTime || null;
+                          if (typeof startTime === 'string' && startTime.includes(':')) {
+                            const [hours, minutes] = startTime.split(':').map(Number);
+                            if (!isNaN(hours) && !isNaN(minutes)) {
+                              const period = hours >= 12 ? 'PM' : 'AM';
+                              const displayHours = hours % 12 || 12;
+                              display = `${displayHours}:${minutes.toString().padStart(2, '0')} ${period}`;
+                            }
+                          } else if (m.startAt) {
+                            const dt = new Date(m.startAt);
+                            if (!isNaN(dt.getTime())) {
+                              display = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+                            }
+                          } else if (m.date && startTime) {
+                            const candidate = new Date(`${m.date}T${startTime}`);
+                            if (!isNaN(candidate.getTime())) {
+                              display = candidate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+                            }
+                          }
+                          return (
+                            <>
+                              <Clock4 className="w-4 h-4 text-[#4b5563] mr-2" />
+                              {display}
+                            </>
+                          );
+                        } catch (e) {
+                          return (
+                            <>
+                              <Clock4 className="w-4 h-4 text-[#4b5563] mr-2" />
+                              Time: TBD
+                            </>
+                          );
+                        }
+                      })()}
+                    </span>
+                    <span className="text-[#2c60ce] text-[13px] md:text-[14px] font-bold">Overs: {m.totalOvers || 20}</span>
+                  </div>
                   
                   {/* Teams Ready Badge */}
                   {bothTeamsReady && (
@@ -519,7 +586,7 @@ function Home() {
             {matchesLoading && <VideoLoader />}
             {!matchesLoading && groups.completed.length === 0 && (
               <div className="w-full h-[500px] flex items-center justify-center py-10">
-                <img src="/No match Found.png" alt="No match found" className="max-w-[280px] w-full m-auto h-[7rem] object-contain" />
+                <img src="/No match Found.svg" alt="No match found" className="max-w-[280px] w-full m-auto h-[7rem] object-contain" />
               </div>
             )}
             <div className="py-14 w-full space-y-4">
@@ -543,30 +610,46 @@ function Home() {
                 return (
                   <div key={m.id} className="cursor-pointer" onClick={() => window.location.href = `/scorecard/${m.id}`}>
                     <div
-                      className="bg-white rounded-[20px] shadow-[0_6px_24px_0_rgba(44,96,206,0.10)] border border-[#e6eaf2] p-0 flex flex-col w-full h-full transition-all duration-200 hover:shadow-[0_8px_32px_0_rgba(44,96,206,0.15)] hover:scale-[1.02]"
+                      className="relative bg-white rounded-[20px] shadow-[0_6px_24px_0_rgba(44,96,206,0.10)] border border-[#e6eaf2] p-0 flex flex-col w-full h-full transition-all duration-200 hover:shadow-[0_8px_32px_0_rgba(44,96,206,0.15)] hover:scale-[1.02]"
                     >
+                      {/* Match Number Badge */}
+                      {m.matchNumber && (
+                        <div className="absolute left-1/2 -top-3 z-30 flex items-center justify-center" style={{transform:'translateX(-50%)'}}>
+                          <span className={`px-3 py-1 rounded-full text-xs font-semibold shadow-sm ${
+                            m.isFinalMatch 
+                              ? 'bg-yellow-100 text-yellow-800 border border-yellow-300' 
+                              : 'bg-purple-100 text-purple-700 border border-purple-200'
+                          }`}>
+                            {m.isFinalMatch ? '🏆 FINAL' : `Match #${m.matchNumber}`}
+                          </span>
+                        </div>
+                      )}
                       {/* Header: Date (left) & Venue (right) */}
                       <div className="flex items-center justify-between px-5 md:px-6 pt-4 md:pt-5 pb-2 md:pb-3">
                         <span className="text-[12px] md:text-[15px] font-regular tracking-wide text-[#4b5563]">{formatCardDate(m.date)}</span>
                         {m.venueMapUrl ? (
-                          <a 
-                            href={m.venueMapUrl} 
-                            target="_blank" 
+                          <a
+                            href={m.venueMapUrl}
+                            target="_blank"
                             rel="noopener noreferrer"
-                            className="text-[12px] md:text-[15px] font-regular tracking-wide text-[#4b5563] hover:text-[#1a4fb8]"
-                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-2 bg-white border border-gray-100 shadow-sm px-3 py-1 rounded-md text-[12px] md:text-[15px] text-[#4b5563] hover:text-[#1a4fb8]"
+                            onClick={(e) => { e.stopPropagation(); }}
                           >
-                            <img src="/Location.svg" alt="Location" className="inline-block w-4 h-4 mr-1 align-text-bottom" /> {m.venue || 'View Map'}
+                            <img src="/locationIcon.svg" alt="Location" className="w-4 h-4" />
+                            <span className="truncate max-w-[160px] text-[#2c60ce] text-[12px]">{m.venue || 'View Map'}</span>
                           </a>
                         ) : (
-                          <span className="text-[12px] md:text-[15px] font-medium tracking-wide text-[#4b5563] truncate max-w-[50%]">{m.venue || ''}</span>
+                          <div className="inline-flex items-center gap-2 bg-[#f3f6fb] border border-gray-100 shadow-sm px-2 py-1 rounded-md text-[12px] md:text-[15px] text-[#4b5563]">
+                            <img src="/locationIcon.svg" alt="Location" className="w-4 h-4" />
+                            <span className="truncate max-w-[160px] text-[#2c60ce] text-[12px]">{m.venue || ''}</span>
+                          </div>
                         )}
                       </div>
                       <div className="border-b border-[#eef2f6] px-4 w-[92%] mx-auto" />
 
                       {/* Teams Row with Scores */}
                       <div className="flex items-center justify-between px-5 md:px-6 py-3 md:py-4">
-                        <div className="flex flex-col items-center w-[90px] max-w-[60%]">
+                        <div className="flex flex-col items-center w-[100px] max-w-[60%]">
                           <TeamLogo team={{...withLogoByName(m.team1), key:'team1'}} size="sm" className="mb-2" />
                           <span className="font-semibold text-[14px] md:text-[15px] text-[#111] text-center truncate w-full">{m.team1?.name || 'Team 1'}</span>
                           <div className="flex items-center space-x-2 mt-1">
@@ -577,7 +660,7 @@ function Home() {
                         <div className="flex flex-col items-center -mt-7 w-[40px]">
                           <span className="text-[#2c60ce] font-bold text-[27px] md:text-[18px] mb-2">v/s</span>
                         </div>
-                        <div className="flex flex-col items-center w-[90px]">
+                        <div className="flex flex-col items-center w-[100px]">
                           <TeamLogo team={{...withLogoByName(m.team2), key:'team2'}} size="sm" className="mb-2" />
                           <span className="font-semibold text-[14px] md:text-[15px] text-[#111] text-center truncate w-full">{m.team2?.name || 'Team 2'}</span>
                           <div className="flex items-center space-x-2 mt-1">

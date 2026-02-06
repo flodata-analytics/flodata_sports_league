@@ -215,7 +215,7 @@ export default function Players() {
             </div>
           )}
           {loading && <div className="text-gray-400 text-center">Loading players...</div>}
-          {error && <div className="text-red-500 text-center">Error loading players</div>}
+          {/* {error && <div className="text-red-500 text-center">Error loading players</div>} */}
           {Array.isArray(filteredPlayers) && filteredPlayers.length === 0 && !loading && (
             <div className="text-gray-400 text-center">No players match "{search}"</div>
           )}

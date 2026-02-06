@@ -10,30 +10,35 @@ import React from 'react';
 
 export default function TeamLogo({ team = {}, size = 'md', className = '', rounded = true, showInitialsFallback = true, alt }) {
   const name = team?.name || 'Team';
-  // Attempt to extract a provided logo URL
-  let src = team?.logo || team?.logoUrl || team?.flag || null;
-  // If team name matches one of the confirmed teams, prefer bundled SVG assets
+  // Candidate coming from data (may be stale like old `flag` values)
+  const candidate = team?.logo || team?.logoUrl || team?.flag || '';
+
+  // Known mappings for bundled assets (normalized by name)
+  let mapped = '';
   try {
     const nm = String(name || '').toLowerCase();
-    if (!src) {
-      if (nm.includes('geotitan') || nm.includes('geotitans')) {
-        src = '/Teams/GeoTitans Logo.svg';
-      } else if (nm.includes('fintech') || nm.includes('fintech falcon') || nm.includes('fintech falcons')) {
-        src = '/Teams/Fintech Falcons Logo.svg';
-      }
+    const norm = nm.replace(/[^a-z0-9]/g, ''); // strip spaces/punctuation for robust matching
+    if (norm.includes('geotitans')) {
+      mapped = '/Teams/Geo Titans Final (1).png';
+    } else if (norm.includes('fintechfalcons') || norm.includes('fintech')) {
+      mapped = '/Teams/Fintech Falcons Final (3).png';
+    } else if (norm.includes('dataninjas')) {
+      mapped = '/Teams/Data Ninjas Final (1).png';
+    } else if (norm.includes('mlmaverics')) {
+      mapped = '/Teams/ML Mavericks Final (1).png';
     }
-  } catch (e) {
-    // ignore
-  }
-  // If no image was uploaded, use deterministic fallback: Team1 / Team2 based on optional index or name hash.
-  if (!src) {
-    // For predictable fallback we examine team.key / id / name to derive a number
-    const key = String(team?.id || team?.key || name).toLowerCase();
-    let hash = 0;
-    for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) & 0xffff;
-    const which = (hash % 2) === 0 ? 1 : 2;
-    src = which === 1 ? '/Team1.png' : '/Team2.png';
-  }
+  } catch {}
+
+  // Heuristic: treat "good" sources as data URLs, http(s), or files under /Teams/
+  const isGood = (u) => {
+    if (!u) return false;
+    const s = String(u).trim();
+    return s.startsWith('data:') || s.startsWith('http://') || s.startsWith('https://') || s.startsWith('/Teams/');
+  };
+
+  // Choose best source: prefer valid candidate; otherwise mapped; otherwise safe fallback
+  const fallback = mapped || '/Teams/imgImage48.png';
+  const [imgSrc, setImgSrc] = React.useState(isGood(candidate) ? candidate : fallback);
 
   // Allow responsive sizing: if `size` is a number or one of 'sm'|'md'|'lg' we derive fixed px sizes.
   // If `size` is set to a non-standard value (e.g. 'responsive'), we skip adding fixed width/height
@@ -45,7 +50,10 @@ export default function TeamLogo({ team = {}, size = 'md', className = '', round
   const radiusClass = rounded ? 'rounded-full' : 'rounded-md';
   const baseClass = `${dimClass} ${radiusClass} object-cover  bg-white ${className}`.trim();
 
+  // If src fails (404 etc.), fall back to a safe bundled asset
+  const handleError = React.useCallback(() => {
+    if (imgSrc !== fallback) setImgSrc(fallback);
+  }, [imgSrc, fallback]);
 
-  // If src resolved (including fallback), render it; no initials fallback needed because we always have an image now.
-  return <img src={src} alt={alt || name} className={baseClass} />;
+  return <img src={imgSrc} onError={handleError} alt={alt || name} className={baseClass} />;
 }

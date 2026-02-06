@@ -17,13 +17,24 @@ export default function FullScoreHeaderCard({ match, teamsByName = new Map() }) 
     `;
     document.head.appendChild(s);
   }, []);
+  const getBundledLogoForName = (raw) => {
+    try {
+      const nm = String(raw || '').toLowerCase();
+      const norm = nm.replace(/[^a-z0-9]/g, '');
+      if (norm.includes('dataninjas')) return '/Teams/Data Ninjas Final (1).png';
+      if (norm.includes('fintechfalcons') || norm.includes('fintech')) return '/Teams/Fintech Falcons Final (3).png';
+      if (norm.includes('geotitans')) return '/Teams/Geo Titans Final (1).png';
+      if (norm.includes('mlmaverics') || norm.includes('mlmavericks')) return '/Teams/ML Mavericks Final (1).png';
+    } catch {}
+    return '';
+  };
   const withLogoByName = (team) => {
     try {
       if (!team) return team;
       if (team.logoUrl || team.logo || team.flag) return team;
       const nm = (team.name || '').trim().toLowerCase();
       if (!nm) return team;
-      const url = teamsByName.get(nm);
+      const url = teamsByName.get(nm) || getBundledLogoForName(nm);
       return url ? { ...team, logoUrl: url } : team;
     } catch { return team; }
   };
@@ -156,13 +167,17 @@ export default function FullScoreHeaderCard({ match, teamsByName = new Map() }) 
             href={match.venueMapUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[#4b5563] text-[12px] md:text-[13px] font-regular hover:text-[#1a4fb8]"
-            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center gap-2 bg-white border border-gray-100 shadow-sm px-3 py-1 rounded-md text-[12px] md:text-[13px] text-[#4b5563] hover:text-[#1a4fb8]"
+            onClick={(e) => { e.stopPropagation(); }}
           >
-            <img src="/Location.svg" alt="Location" className="inline-block w-3 h-4 mr-1 align-text-bottom" /> {match.venue || 'View Map'}
+            <img src="/locationIcon.svg" alt="Location" className="w-3 h-4" />
+            <span className="truncate max-w-[160px] text-[#2c60ce] text-[12px]">{match.venue || 'View Map'}</span>
           </a>
         ) : (
-          <span className="text-[#4b5563] text-[12px] md:text-[13px] font-medium truncate max-w-[50%]">{match?.venue || ''}</span>
+          <div className="inline-flex items-center gap-2 bg-[#f3f6fb] border border-gray-100 shadow-sm px-2 py-1 rounded-md text-[12px] md:text-[13px] text-[#4b5563]">
+            <img src="/locationIcon.svg" alt="Location" className="w-3 h-4" />
+            <span className="truncate max-w-[160px] text-[#2c60ce] text-[12px]">{match?.venue || ''}</span>
+          </div>
         )}
       </div>
       <div className="border-b border-[#eef2f6] px-4 w-[92%] mx-auto" />

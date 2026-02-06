@@ -387,6 +387,18 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
               </div>
             );
           })()}
+          {/* Match Number Badge */}
+          {match.matchNumber && (
+            <div className="absolute left-1/2 top-8 z-10 flex items-center justify-center" style={{transform:'translateX(-50%)'}}>
+              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                match.isFinalMatch 
+                  ? 'bg-yellow-100 text-yellow-800 border border-yellow-300' 
+                  : 'bg-purple-100 text-purple-700 border border-purple-200'
+              }`}>
+                {match.isFinalMatch ? '🏆 FINAL' : `Match #${match.matchNumber}`}
+              </span>
+            </div>
+          )}
           {/* Date & Venue inside the live card (top-left date, top-right venue) */}
           <div className="absolute  top-3 left-5 right-4 z-10 flex items-center justify-between pointer-events-none">
             <span className="text-[12px] md:text-[15px] font-regular tracking-wide text-[#4b5563]">{(() => {
@@ -401,18 +413,26 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
                   const dt = new Date(ts); const day = dt.getDate(); const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; const mon = monthNames[dt.getMonth()]||''; const yr = dt.getFullYear(); return `${day} ${mon} ${yr}`;
                 } catch(e) { return ''; }
               })()}</span>
-            <div className="pointer-events-auto -pt-2 ">
-              {match?.venueMapUrl ? (
-                <a href={match.venueMapUrl} target="_blank" rel="noopener noreferrer" className="text-[12px]  md:text-[15px] font-regular tracking-wide text-[#4b5563] hover:text-[#1a4fb8] bg-white/0 px-1 py-0.5 rounded" onClick={(e) => e.stopPropagation()}>
-                  <img src="/Location.svg" alt="Location" className="inline-block w-4 h-4 mr-1 align-text-bottom" /> {match.venue || 'View Map'}
-                </a>
-              ) : (
-                <span className="text-[12px] md:text-[15px] font-medium tracking-wide text-[#4b5563] truncate max-w-[50%]">{match?.venue || ''}</span>
-              )}
-
-
-
-              {/* <div className='w-full border border-gray-100 mx-auto'/> */}
+            <div className="pointer-events-auto -pt-2">
+              <div className="inline-flex items-center">
+                {match?.venueMapUrl ? (
+                  <a
+                    href={match.venueMapUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 bg-[#f3f6fb] border border-gray-100 shadow-sm px-3 py-1 rounded-md text-[12px] md:text-[14px] text-[#4b5563] hover:text-[#1a4fb8]"
+                    onClick={(e) => { e.stopPropagation(); }}
+                  >
+                    <img src="/locationIcon.svg" alt="Location" className="w-4 h-4" />
+                    <span className="truncate max-w-[160px] text-[#2c60ce] text-[12px]">{match.venue || 'View Map'}</span>
+                  </a>
+                ) : (
+                  <div className="inline-flex  items-center gap-2  bg-[#f3f6fb] border border-gray-100 shadow-sm px-2 py-1 rounded-md text-[12px] md:text-[14px] text-[#4b5563]">
+                    <img src="/locationIcon.svg" alt="Location" className="w-4 h-4" />
+                    <span className="truncate max-w-[160px] text-[#2c60ce] text-[12px] ">{match?.venue || ''}</span>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           <div className={`bg-white w-full h-auto ${isFullScorecardRoute ? 'pt-6 md:pt-8' : ''}`}>
@@ -422,7 +442,7 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
           <div className={`flex ${isFullScorecardRoute ? 'items-start justify-between px-5 md:px-6' : 'items-center justify-center'} gap-8 w-full ${isFullScorecardRoute ? '' : 'max-w-md mx-auto'}`}>
 
             {/* Team A */}
-            <div className={`flex flex-col items-center w-[90px] ${isFullScorecardRoute ? 'mt-0' : 'mt-6'} gap-1 mb-2`}>
+            <div className={`flex flex-col items-center w-[100px] ${isFullScorecardRoute ? 'mt-0' : 'mt-6'} gap-1 mb-2`}>
               <TeamLogo
                 team={{...withLogoByName(match.team1), key:'team1'}}
                 size={isFullScorecardRoute ? 'responsive' : 'sm'}
@@ -449,7 +469,7 @@ function LiveScoreboard({ matchId = 'current-match', disableLink = false, hideBa
               <p className={`${isFullScorecardRoute ? 'font-bold text-[#2c60ce] text-[40px] md:text-[48px] leading-none' : 'font-bold text-[#2c60ce] text-[24px] leading-none'}`}>V/S</p>
             </div>
             {/* Team B */}
-            <div className={`flex flex-col items-center w-[90px] gap-1 mb-2 ${isFullScorecardRoute ? 'mt-0' : 'mt-6'}`}>
+            <div className={`flex flex-col items-center w-[100px] gap-1 mb-2 ${isFullScorecardRoute ? 'mt-0' : 'mt-6'}`}>
               <TeamLogo
                 team={{...withLogoByName(match.team2), key:'team2'}}
                 size={isFullScorecardRoute ? 'responsive' : 'sm'}

@@ -23,6 +23,14 @@ export default function MatchSummaryCard({ match }) {
 
   return (
     <div className="bg-white rounded-2xl shadow p-4 mt-4">
+      {/* Match Number Badge */}
+      {match.matchNumber && (
+        <div className="flex justify-center mb-2">
+          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${match.isFinalMatch ? 'bg-yellow-100 text-yellow-800 border border-yellow-300' : 'bg-purple-100 text-purple-700 border border-purple-200'}`}>
+            {match.isFinalMatch ? '🏆 FINAL' : `Match #${match.matchNumber}`}
+          </span>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div className="flex flex-col items-center w-2/5">
           <TeamLogo team={{...match.team1, key:'team1'}} size="sm" />

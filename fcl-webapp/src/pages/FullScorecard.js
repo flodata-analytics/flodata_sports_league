@@ -261,13 +261,17 @@ export default function FullScorecard() {
                   href={match.venueMapUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-[#4b5563] text-[12px] md:text-[13px] font-regular hover:text-[#1a4fb8]"
-                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-2 bg-white border border-gray-100 shadow-sm px-3 py-1 rounded-md text-[12px] md:text-[13px] text-[#4b5563] hover:text-[#1a4fb8]"
+                  onClick={(e) => { e.stopPropagation(); }}
                 >
-                    <img src="/Location.svg" alt="Location" className="inline-block w-4 h-4 mr-1 align-text-bottom" /> {match.venue || 'View Map'}
+                    <img src="/locationIcon.svg" alt="Location" className="w-4 h-4" />
+                    <span className="truncate max-w-[160px]">{match.venue || 'View Map'}</span>
                 </a>
               ) : (
-                <span className="text-[#9ca4ab] text-[12px] md:text-[13px] font-medium truncate max-w-[50%]">{match.venue || ''}</span>
+                <div className="inline-flex items-center gap-2 bg-white border border-gray-100 shadow-sm px-3 py-1 rounded-md text-[12px] md:text-[13px] text-[#9ca4ab]">
+                  <img src="/Location.svg" alt="Location" className="w-4 h-4" />
+                  <span className="truncate max-w-[160px]">{match.venue || ''}</span>
+                </div>
               )}
             </div>
             <div className="border-b border-[#eef2f6] w-full" />
@@ -375,7 +379,7 @@ export default function FullScorecard() {
                 className={`flex-1 h-12 rounded-xl text-base font-semibold transition-colors duration-150 focus:outline-none ${selectedTeam==='team1' ? 'bg-[#2c60ce] text-white shadow' : 'text-gray-600'}`}
                 onClick={() => setSelectedTeam('team1')}
               >
-                Team Blue
+                {match.team1?.name || 'Team 1'}
               </button>
               <button
                 role="tab"
@@ -383,7 +387,7 @@ export default function FullScorecard() {
                 className={`flex-1 h-12 rounded-xl text-base font-semibold transition-colors duration-150 focus:outline-none ${selectedTeam==='team2' ? 'bg-[#2c60ce] text-white shadow' : 'text-gray-600'}`}
                 onClick={() => setSelectedTeam('team2')}
               >
-                Team White
+                {match.team2?.name || 'Team 2'}
               </button>
             </div>
           </div>
@@ -392,7 +396,7 @@ export default function FullScorecard() {
             const inns = Array.isArray(match.innings) ? match.innings : [];
             const inn = inns.find(i => i?.teamKey === selectedTeam);
             const teamObj = match[selectedTeam] || {};
-            const teamName = teamObj.name || (selectedTeam === 'team1' ? 'Team Blue' : 'Team White');
+            const teamName = teamObj.name || (selectedTeam === 'team1' ? (match.team1?.name || 'Team 1') : (match.team2?.name || 'Team 2'));
             const total = inn?.total || { runs: 0, wickets: 0, overs: '0.0' };
             const played = (Array.isArray(inn?.batting) ? inn.batting.filter(b => (b.balls > 0 || b.runs > 0 || b.isOnStrike || b.isNonStrike || b.isOut)) : []);
             const started = !!inn && played.length > 0;
@@ -423,14 +427,18 @@ export default function FullScorecard() {
                         <div className="font-semibold text-gray-800 mb-2">Yet to bat</div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                           {yetToBat.map((p, idx) => {
-                            const rounded = (idx % 2 === 0)
+                            const isLeft = (idx % 2 === 0);
+                            const rounded = isLeft
                               ? 'rounded-l-2xl rounded-r-none'
                               : 'rounded-r-2xl rounded-l-none';
+                            const gradient = isLeft
+                              ? 'linear-gradient(90deg, rgba(72,122,229,0.10) 0%, #FFFFFF 100%)'
+                              : 'linear-gradient(90deg, #FFFFFF 0%, rgba(72,122,229,0.10) 100%)';
                             return (
                             <div
                               key={p.id || p.playerId || idx}
                               className={`flex items-center gap-3 border border-[#e1e5ee] shadow-sm px-3 py-2 ${rounded} overflow-hidden`}
-                              style={{ background: 'linear-gradient(90deg, #FFFFFF 0%, rgba(72,122,229,0.10) 100%)' }}
+                              style={{ background: gradient }}
                             >
                               <div className={`w-12 h-12 rounded-full overflow-hidden flex items-center justify-center border-2 ${selectedTeam==='team1' ? 'border-[#2c60ce] bg-blue-50' : 'border-gray-400 bg-gray-50'}`}>
                                 <img src={getPlayerAvatar(p)} alt={p.name} className="w-full h-full object-cover" />
@@ -503,14 +511,18 @@ export default function FullScorecard() {
                         <div className="font-semibold text-gray-800 mb-2">Yet to bat</div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                           {yetToBat.map((p, idx) => {
-                            const rounded = (idx % 2 === 0)
+                            const isLeft = (idx % 2 === 0);
+                            const rounded = isLeft
                               ? 'rounded-l-2xl rounded-r-none'
                               : 'rounded-r-2xl rounded-l-none';
+                            const gradient = isLeft
+                              ? 'linear-gradient(90deg, rgba(72,122,229,0.10) 0%, #FFFFFF 100%)'
+                              : 'linear-gradient(90deg, #FFFFFF 0%, rgba(72,122,229,0.10) 100%)';
                             return (
                             <div
                               key={p.id || p.playerId || idx}
                               className={`flex items-center gap-3 border border-[#e1e5ee] shadow-sm px-3 py-2 ${rounded} overflow-hidden`}
-                              style={{ background: 'linear-gradient(90deg, #FFFFFF 0%, rgba(72,122,229,0.10) 100%)' }}
+                              style={{ background: gradient }}
                             >
                               <div className={`w-12 h-12 rounded-full overflow-hidden flex items-center justify-center border-2 ${selectedTeam==='team1' ? 'border-[#2c60ce] bg-blue-50' : 'border-gray-400 bg-gray-50'}`}>
                                 <img src={getPlayerAvatar(p)} alt={p.name} className="w-full h-full object-cover" />
@@ -568,10 +580,10 @@ export default function FullScorecard() {
         {teamsDecided && (
           <div className="w-full max-w-2xl mx-auto mt-6 mb-4">
             <div className="flex flex-col gap-6">
-              {/* Team Blue — Playing XI */}
+              {/* Team 1 — Playing XI */}
               <div className="flex-1 rounded-2xl">
                 <div className="flex items-center gap-2 mb-3 w-full">
-                  <div className="text-sm sm:text-base font-semibold text-[#2c60ce]">Team Blue</div>
+                  <div className="text-sm sm:text-base font-semibold text-[#2c60ce]">{match.team1?.name || 'Team 1'}</div>
                   <img src="/Dot.svg" alt="·" className="w-2 h-2" />
                   <div className="text-sm text-gray-600">Playing XI</div>
                 </div>
@@ -605,10 +617,10 @@ export default function FullScorecard() {
                 )}
               </div>
 
-              {/* Team White — Playing XI */}
+              {/* Team 2 — Playing XI */}
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-3">
-                  <div className="text-sm sm:text-base font-semibold text-[#e11922]">Team White</div>
+                  <div className="text-sm sm:text-base font-semibold text-[#e11922]">{match.team2?.name || 'Team 2'}</div>
                   <img src="/Dot.svg" alt="·" className="w-2 h-2" />
                   <div className="text-sm text-gray-600">Playing XI</div>
                 </div>

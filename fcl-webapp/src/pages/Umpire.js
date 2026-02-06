@@ -2,7 +2,11 @@ import React, { useState } from 'react';
 import TeamLogo from '../components/TeamLogo';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { addDoc, collection, setDoc, doc, updateDoc, deleteDoc, increment, getDoc } from 'firebase/firestore';
+import { addDoc, collection, setDoc, doc, updateDoc, deleteDoc, increment, getDoc, writeBatch } from 'firebase/firestore';
+import { immediateFlush } from '../utils/firestoreWriteQueue';
+import { queueUpdate } from '../utils/firestoreWriteQueue';
+import { useCollection, useDocument } from '../hooks/useFirestore';
+import { getPlayerAvatar, isCustomAvatar } from '../utils/getPlayerAvatar';
 // Storage removed; inline base64 images used now.
 const fileToDataUrl = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -10,31 +14,115 @@ const fileToDataUrl = (file) => new Promise((resolve, reject) => {
   reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
   reader.readAsDataURL(file);
 });
-import { useCollection, useDocument } from '../hooks/useFirestore';
-import { getPlayerAvatar, isCustomAvatar } from '../utils/getPlayerAvatar';
+
+// Prevent embedding large base64/data URLs into match documents which can exceed Firestore limits.
+const sanitizeTeamForMatch = (team) => {
+  if (!team) return team;
+  const safe = {
+    name: team.name || '',
+    runs: Number(team.runs) || 0,
+    wickets: Number(team.wickets) || 0,
+    overs: team.overs || 0,
+    players: Array.isArray(team.players) ? team.players : [],
+    rosterLocked: !!team.rosterLocked,
+  };
+  // Prefer server-hosted paths (/Teams/...), avoid embedding large data: URIs which bloat documents
+  const logoCandidate = (team.logoUrl || team.logo || '');
+  if (typeof logoCandidate === 'string' && logoCandidate.startsWith('/')) {
+    safe.logoUrl = logoCandidate;
+  } else if (typeof logoCandidate === 'string' && !logoCandidate.startsWith('data:')) {
+    // non-data HTTP(S) URL - safe to include
+    safe.logoUrl = logoCandidate;
+  } else {
+    // data: URIs are dropped to keep match doc small; client can resolve team logo from teams collection
+    safe.logoUrl = null;
+  }
+  return safe;
+};
+
+const sanitizeMatchPayload = (payload) => {
+  if (!payload || typeof payload !== 'object') return payload;
+  const out = { ...payload };
+  try {
+    if (out.team1) out.team1 = sanitizeTeamForMatch(out.team1);
+    if (out.team2) out.team2 = sanitizeTeamForMatch(out.team2);
+  } catch (e) {}
+  return out;
+};
+
+// Convert a same-origin URL (e.g., /Teams/logo.png) to a base64 data URL
+const urlToDataUrl = async (url) => {
+  if (!url) throw new Error('Empty URL');
+  if (String(url).startsWith('data:')) return url; // already inline
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
+  const blob = await res.blob();
+  return await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error || new Error('Failed to convert blob'));
+    r.readAsDataURL(blob);
+  });
+};
 
 function Umpire() {
   const { userProfile } = useAuth();
   const [activeTab, setActiveTab] = useState('setup'); // setup | matches | players | teams | control
   const [team1, setTeam1] = useState('Team Blue');
   const [team2, setTeam2] = useState('Team White');
+  const [customTeam1Name, setCustomTeam1Name] = useState(''); // Custom team name input
+  const [customTeam2Name, setCustomTeam2Name] = useState(''); // Custom team name input
+  const [useCustomTeam1, setUseCustomTeam1] = useState(false); // Toggle for custom name
+  const [useCustomTeam2, setUseCustomTeam2] = useState(false); // Toggle for custom name
+  const [matchNumber, setMatchNumber] = useState(''); // Match number (1, 2, 3, etc.)
+  const [isFinalMatch, setIsFinalMatch] = useState(false); // Is this a final match?
+  const [winnerOfMatch1, setWinnerOfMatch1] = useState(''); // For finals: winner of which match
+  const [winnerOfMatch2, setWinnerOfMatch2] = useState(''); // For finals: winner of which match
   const [venue, setVenue] = useState('');
   const [venueMapUrl, setVenueMapUrl] = useState('');
   const [date, setDate] = useState(() => new Date().toISOString().slice(0,10));
+  const [startTime, setStartTime] = useState('');
   const [totalOvers, setTotalOvers] = useState(20);
   const [playersPerSideSetup, setPlayersPerSideSetup] = useState(11);
   const [makeCurrent, setMakeCurrent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [createdId, setCreatedId] = useState('');
+  const [finalizing, setFinalizing] = useState(false); // guard against double finalize clicks
   // Inline edit state for Matches tab
   const [editingId, setEditingId] = useState('');
   const [editTitle, setEditTitle] = useState('');
   const [editDate, setEditDate] = useState('');
+  const [editStartTime, setEditStartTime] = useState('');
   const [editVenue, setEditVenue] = useState('');
   const [editOvers, setEditOvers] = useState('');
 
   const isUmpire = !!(userProfile?.isUmpire || userProfile?.role === 'umpire' || userProfile?.isAdmin);
+
+  // Helper to safely modify POTM awards. Positive deltas use FieldValue.increment; negative deltas
+  // are applied by reading the current value and setting a clamped numeric value (>= 0).
+  const safeModifyPotm = async (playerId, delta) => {
+    if (!playerId || !Number.isFinite(delta)) return;
+    try {
+      const pRef = doc(db, 'players', playerId);
+      const ppRef = doc(db, 'playerProfiles', playerId);
+      if (delta > 0) {
+        try { queueUpdate(pRef, { potmAwards: increment(delta) }); } catch {}
+        try { queueUpdate(ppRef, { potmAwards: increment(delta) }); } catch {}
+        return;
+      }
+      // For negative delta, fetch current numeric values and set clamped values (>=0)
+      const [pSnap, ppSnap] = await Promise.all([getDoc(pRef), getDoc(ppRef)]);
+      const pVal = (pSnap.exists() && typeof pSnap.data().potmAwards === 'number') ? pSnap.data().potmAwards : (pSnap.exists() && pSnap.data().awards?.potm ? Number(pSnap.data().awards.potm) : 0);
+      const ppVal = (ppSnap.exists() && typeof ppSnap.data().potmAwards === 'number') ? ppSnap.data().potmAwards : (ppSnap.exists() && ppSnap.data().awards?.potm ? Number(ppSnap.data().awards.potm) : 0);
+      const newP = Math.max(0, pVal + delta);
+      const newPP = Math.max(0, ppVal + delta);
+      try { queueUpdate(pRef, { potmAwards: newP }); } catch {}
+      try { queueUpdate(ppRef, { potmAwards: newPP }); } catch {}
+    } catch (e) {
+      // best-effort: swallow and continue
+    }
+  };
 
   // Live matches list for the Matches tab
   const { data: allMatches } = useCollection('matches', null, [], 100, { enabled: true, poll: false });
@@ -63,6 +151,19 @@ function Umpire() {
         target.unshift({ ...(currentMatch||{}), id: actualMatchId });
       }
     }
+    // Deduplicate any arrays by id to avoid React 'duplicate key' warnings
+    const dedupeById = (arr) => {
+      const m = new Map();
+      (arr || []).forEach(item => {
+        if (!item) return;
+        const id = item.id || item._tempId || JSON.stringify(item);
+        if (!m.has(id)) m.set(id, item);
+      });
+      return Array.from(m.values());
+    };
+    const liveUniq = dedupeById(live);
+    const upcomingUniq = dedupeById(upcoming);
+    const completedUniq = dedupeById(completed);
     // basic sort: upcoming by date asc, others by date desc
     const ts = (d) => {
       if (!d) return 0;
@@ -71,10 +172,10 @@ function Umpire() {
       if (typeof d === 'object' && typeof d.seconds === 'number') return d.seconds * 1000;
       return 0;
     };
-    upcoming.sort((a,b)=> ts(a.date)-ts(b.date));
-    live.sort((a,b)=> ts(b.date)-ts(a.date));
-    completed.sort((a,b)=> ts(b.date)-ts(a.date));
-    return { live, upcoming, completed };
+    upcomingUniq.sort((a,b)=> ts(a.date)-ts(b.date));
+    liveUniq.sort((a,b)=> ts(b.date)-ts(a.date));
+    completedUniq.sort((a,b)=> ts(b.date)-ts(a.date));
+    return { live: liveUniq, upcoming: upcomingUniq, completed: completedUniq };
   }, [allMatches, currentMatch]);
 
   // Create Player form state (Players tab)
@@ -88,8 +189,10 @@ function Umpire() {
   const [pUploading, setPUploading] = useState(false);
   const [pRole, setPRole] = useState('batsman'); // batsman | bowler | all-rounder
   const [pBattingStyle, setPBattingStyle] = useState('right-handed'); // right-handed | left-handed
+  const [pBowlingStyle, setPBowlingStyle] = useState('right-arm'); // right-arm | left-arm | right-arm-spin | left-arm-spin
   const [pJerseyNumber, setPJerseyNumber] = useState('');
   const [epAvatarPreview, setEpAvatarPreview] = useState('');
+  const [epModelUrl, setEpModelUrl] = useState('');
 
   // Control tab local state (rosters, locks, overrides)
   const [team1Roster, setTeam1Roster] = useState([]);
@@ -133,6 +236,7 @@ function Umpire() {
   const [epStatus, setEpStatus] = useState('available');
   const [epRole, setEpRole] = useState('');
   const [epBattingStyle, setEpBattingStyle] = useState('');
+  const [epBowlingStyle, setEpBowlingStyle] = useState('');
   const [epJerseyNumber, setEpJerseyNumber] = useState('');
   
   // Teams collection for dynamic team selection (hooks must be before any early return)
@@ -142,6 +246,41 @@ function Umpire() {
     const list = teamOptions.map(t=>t.name);
     return list.find(o => o !== v) || list[0];
   };
+  // Seed default teams if missing
+  const [seededDefaults, setSeededDefaults] = React.useState(false);
+  React.useEffect(() => {
+    const run = async () => {
+      if (!isUmpire) return;
+      if (seededDefaults) return;
+      const existing = Array.isArray(teams) ? teams.map(t => String(t?.name||'').trim().toLowerCase()) : [];
+      // Desired default teams and their bundled logo assets under /public/Teams
+      const DEFAULT_TEAMS = [
+        { name: "Data Ninjas", logoUrl: '/Teams/Data Ninjas Final (1).png' },
+        { name: 'Fintech Falcons', logoUrl: '/Teams/Fintech Falcons Final (3).png' },
+        { name: 'Geotitans', logoUrl: '/Teams/Geo Titans Final (1).png' },
+        { name: 'ML Maverics', logoUrl: '/Teams/ML Mavericks Final (1).png' },
+      ];
+      const missing = DEFAULT_TEAMS.filter(dt => !existing.includes(dt.name.trim().toLowerCase()));
+      if (missing.length === 0) { setSeededDefaults(true); return; }
+      try {
+        // Create any missing defaults. Avoid converting images to base64 on the main thread —
+        // store the bundled path directly and defer heavy conversion if needed later.
+        await Promise.all(missing.map(async (dt) => {
+          const logoVal = dt.logoUrl; // keep as path (fast)
+          await addDoc(collection(db, 'teams'), { name: dt.name, logoUrl: logoVal, logo: logoVal });
+        }));
+        setSeededDefaults(true);
+        try { console.info('Seeded default teams:', missing.map(m=>m.name).join(', ')); } catch {}
+      } catch (e) {
+        // Non-fatal; UI will still allow manual creation
+        try { console.warn('Failed to seed default teams', e); } catch {}
+      }
+    };
+    // Defer seeding slightly so initial UI interactions aren't delayed by network/IO.
+    const t = setTimeout(() => { run().catch(()=>{}); }, 80);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teams, isUmpire, seededDefaults]);
   React.useEffect(() => {
     if (!Array.isArray(teams) || teams.length === 0) return;
     if (!team1 || !teams.some(t => t.name === team1)) setTeam1(teams[0]?.name || '');
@@ -151,6 +290,241 @@ function Umpire() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teams?.length]);
+
+  // Auto-deduplicate teams with the same name (case-insensitive). Runs once per load.
+  const [dedupedOnce, setDedupedOnce] = React.useState(false);
+  React.useEffect(() => {
+    const run = async () => {
+      if (!isUmpire) return;
+      if (dedupedOnce) return;
+      if (!Array.isArray(teams) || teams.length === 0) return;
+      const groups = {};
+      for (const t of teams) {
+        const k = String(t?.name || '').trim().toLowerCase();
+        if (!k) continue;
+        if (!groups[k]) groups[k] = [];
+        groups[k].push(t);
+      }
+      const dupKeys = Object.keys(groups).filter(k => groups[k].length > 1);
+      if (dupKeys.length === 0) return;
+      const toDelete = [];
+      const kept = [];
+      const score = (t) => {
+        const lu = String(t?.logoUrl || t?.logo || '').trim();
+        let s = 0;
+        if (lu) s += 2;
+        if (lu.startsWith('/Teams/')) s += 1;
+        if (lu.startsWith('data:')) s += 1;
+        return s;
+      };
+      for (const k of dupKeys) {
+        const list = groups[k];
+        let best = list[0];
+        for (let i = 1; i < list.length; i++) {
+          if (score(list[i]) > score(best)) best = list[i];
+        }
+        kept.push(best);
+        for (const t of list) {
+          if (t.id !== best.id) toDelete.push(t);
+        }
+      }
+      if (toDelete.length === 0) return;
+      try {
+        await Promise.all(toDelete.map(t => t?.id ? deleteDoc(doc(db, 'teams', t.id)) : Promise.resolve()));
+        setDedupedOnce(true);
+        setMessage(`Removed duplicate teams for: ${dupKeys.map(k => groups[k][0]?.name || k).join(', ')}`);
+      } catch (e) {
+        try { console.warn('Failed to delete duplicate teams', e); } catch {}
+      }
+    };
+    // Defer dedupe work to avoid blocking UI interactions
+    const _tid_dedupe = setTimeout(() => { run().catch(()=>{}); }, 80);
+    return () => clearTimeout(_tid_dedupe);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teams, isUmpire, dedupedOnce]);
+
+  // Targeted one-time cleanup: if there are multiple 'Data Ninjas' entries, remove extras.
+  const [removedDataNinjasDup, setRemovedDataNinjasDup] = React.useState(false);
+  React.useEffect(() => {
+    const run = async () => {
+      if (!isUmpire) return;
+      if (removedDataNinjasDup) return;
+      if (!Array.isArray(teams) || teams.length === 0) return;
+      const key = 'data ninjas';
+      const list = teams.filter(t => String(t?.name || '').trim().toLowerCase() === key);
+      if (list.length <= 1) { setRemovedDataNinjasDup(true); return; }
+      const score = (t) => {
+        const lu = String(t?.logoUrl || t?.logo || '').trim();
+        let s = 0;
+        if (lu) s += 2;
+        if (lu.startsWith('/Teams/')) s += 1;
+        if (lu.startsWith('data:')) s += 1;
+        return s;
+      };
+      let best = list[0];
+      for (let i = 1; i < list.length; i++) {
+        if (score(list[i]) > score(best)) best = list[i];
+      }
+      const toDelete = list.filter(t => t.id && t.id !== best.id);
+      if (toDelete.length === 0) { setRemovedDataNinjasDup(true); return; }
+      try {
+        await Promise.all(toDelete.map(t => deleteDoc(doc(db, 'teams', t.id))));
+        setRemovedDataNinjasDup(true);
+        setMessage(`Removed ${toDelete.length} duplicate 'Data Ninjas' team(s).`);
+      } catch (e) {
+        try { console.warn('Failed to remove Data Ninjas duplicates', e); } catch {}
+      }
+    };
+    const _tid_dn = setTimeout(() => { run().catch(()=>{}); }, 90);
+    return () => clearTimeout(_tid_dn);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teams, isUmpire, removedDataNinjasDup]);
+
+  // Targeted cleanup for 'Daa Ninjas': remove duplicate docs, keep the best one.
+  const [removedDaaNinjasDup, setRemovedDaaNinjasDup] = React.useState(false);
+  React.useEffect(() => {
+    const run = async () => {
+      if (!isUmpire) return;
+      if (removedDaaNinjasDup) return;
+      if (!Array.isArray(teams) || teams.length === 0) return;
+      const key = 'daa ninjas';
+      const list = teams.filter(t => String(t?.name || '').trim().toLowerCase() === key);
+      if (list.length <= 1) { setRemovedDaaNinjasDup(true); return; }
+      const score = (t) => {
+        const lu = String(t?.logoUrl || t?.logo || '').trim();
+        let s = 0;
+        if (lu) s += 2;
+        if (lu.startsWith('/Teams/')) s += 1;
+        if (lu.startsWith('data:')) s += 1;
+        return s;
+      };
+      let best = list[0];
+      for (let i = 1; i < list.length; i++) {
+        if (score(list[i]) > score(best)) best = list[i];
+      }
+      const toDelete = list.filter(t => t.id && t.id !== best.id);
+      if (toDelete.length === 0) { setRemovedDaaNinjasDup(true); return; }
+      try {
+        await Promise.all(toDelete.map(t => deleteDoc(doc(db, 'teams', t.id))));
+        setRemovedDaaNinjasDup(true);
+        setMessage(`Removed ${toDelete.length} duplicate 'Daa Ninjas' team(s).`);
+      } catch (e) {
+        try { console.warn('Failed to remove Daa Ninjas duplicates', e); } catch {}
+      }
+    };
+    const _tid_daa = setTimeout(() => { run().catch(()=>{}); }, 100);
+    return () => clearTimeout(_tid_daa);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teams, isUmpire, removedDaaNinjasDup]);
+
+  // Backfill team logos in Firestore for known teams (idempotent)
+  const [backfilledTeamLogos, setBackfilledTeamLogos] = React.useState(false);
+  React.useEffect(() => {
+    const run = async () => {
+      if (!isUmpire) return;
+      if (backfilledTeamLogos) return;
+      if (!Array.isArray(teams) || teams.length === 0) return;
+      const map = new Map();
+      map.set('data ninjas', '/Teams/Data Ninjas Final (1).png');
+      map.set('fintech falcons', '/Teams/Fintech Falcons Final (3).png');
+      map.set('geotitans', '/Teams/Geo Titans Final (1).png');
+      map.set('geo titans', '/Teams/Geo Titans Final (1).png');
+      map.set('ml maverics', '/Teams/ML Mavericks Final (1).png');
+      map.set('daa ninjas', '/Teams/Data Ninjas Final (1).png');
+
+      const updates = teams.filter(t => {
+        const nm = String(t?.name || '').trim().toLowerCase();
+        const desired = map.get(nm);
+        const cur = String(t?.logoUrl || t?.logo || '').trim();
+        return desired && cur !== desired;
+      });
+      if (updates.length === 0) { setBackfilledTeamLogos(true); return; }
+      try {
+        await Promise.all(updates.map(async (t) => {
+          const key = String(t.name).trim().toLowerCase();
+          const want = map.get(key);
+          // Write the mapped path directly — avoid converting to base64 here.
+          await updateDoc(doc(db, 'teams', t.id), { logoUrl: want, logo: want });
+        }));
+        setBackfilledTeamLogos(true);
+      } catch (e) {
+        try { console.warn('Backfill team logos failed', e); } catch {}
+      }
+    };
+    // Defer backfill work slightly to avoid blocking initial UI interactions
+    const _tid = setTimeout(() => { run().catch(()=>{}); }, 120);
+    return () => clearTimeout(_tid);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teams, isUmpire, backfilledTeamLogos]);
+
+  // Backfill match documents with embedded team logoUrl if missing (limited to loaded matches)
+  const [backfilledMatchLogos, setBackfilledMatchLogos] = React.useState(false);
+  React.useEffect(() => {
+    const run = async () => {
+      if (!isUmpire) return;
+      if (backfilledMatchLogos) return;
+      if (!Array.isArray(allMatches) || allMatches.length === 0) return;
+      // Build quick lookup from teams collection
+      const tmap = new Map();
+      (Array.isArray(teams) ? teams : []).forEach(t => {
+        const nm = String(t?.name || '').trim().toLowerCase();
+        const url = String(t?.logoUrl || t?.logo || '').trim();
+        if (nm && url) tmap.set(nm, url);
+      });
+      const pending = [];
+      for (const m of allMatches) {
+        if (!m?.id || m.id === 'current-match') continue;
+        const t1 = m?.team1 || {}; const t2 = m?.team2 || {};
+        const t1url = String(t1.logoUrl || '').trim();
+        const t2url = String(t2.logoUrl || '').trim();
+        const n1 = String(t1.name || '').trim().toLowerCase();
+        const n2 = String(t2.name || '').trim().toLowerCase();
+        const want1 = (!t1url && n1 && tmap.get(n1)) ? tmap.get(n1) : null;
+        const want2 = (!t2url && n2 && tmap.get(n2)) ? tmap.get(n2) : null;
+        if (want1 || want2) {
+          const newT1 = want1 ? sanitizeTeamForMatch({ ...t1, logoUrl: want1 }) : sanitizeTeamForMatch(t1);
+          const newT2 = want2 ? sanitizeTeamForMatch({ ...t2, logoUrl: want2 }) : sanitizeTeamForMatch(t2);
+          pending.push(updateDoc(doc(db, 'matches', m.id), {
+            team1: newT1,
+            team2: newT2,
+            lastUpdated: new Date(),
+          }));
+        }
+      }
+      if (pending.length === 0) { setBackfilledMatchLogos(true); return; }
+      try { await Promise.all(pending); setBackfilledMatchLogos(true); } catch (e) { try { console.warn('Backfill match logos failed', e); } catch {} }
+    };
+    const _tid_bm = setTimeout(() => { run().catch(()=>{}); }, 120);
+    return () => clearTimeout(_tid_bm);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allMatches, teams, isUmpire, backfilledMatchLogos]);
+
+  // Remove specific unwanted teams (one-time): Data Ninja's and Geo Titans variants
+  // Disabled auto-removal of specific team names
+  // const [removedSpecificTeams, setRemovedSpecificTeams] = React.useState(false);
+  // React.useEffect(() => {
+  //   const run = async () => {
+  //     if (!isUmpire) return;
+  //     if (removedSpecificTeams) return;
+  //     if (!Array.isArray(teams) || teams.length === 0) return;
+  //     const targets = ["data ninja's", 'geo titan', 'geo titans', 'geotitans', 'geo titens'];
+  //     const toRemove = teams.filter(t => {
+  //       const n = String(t?.name || '').trim().toLowerCase();
+  //       return targets.includes(n);
+  //     });
+  //     if (toRemove.length === 0) { setRemovedSpecificTeams(true); return; }
+  //     try {
+  //       await Promise.all(toRemove.map(t => t?.id ? deleteDoc(doc(db, 'teams', t.id)) : Promise.resolve()));
+  //       setRemovedSpecificTeams(true);
+  //       setMessage(`Removed ${toRemove.length} team(s): ${toRemove.map(t=>t.name).join(', ')}`);
+  //     } catch (e) {
+  //       try { console.warn('Failed to remove specific teams', e); } catch {}
+  //     }
+  //   };
+  //   const _tid_rs = setTimeout(() => { run().catch(()=>{}); }, 110);
+  //   return () => clearTimeout(_tid_rs);
+  //   // eslint-disable-next-line react-hooks/exhaustive-deps
+  // }, [teams, isUmpire, removedSpecificTeams]);
 
   // Teams management state
   const [tName, setTName] = useState('');
@@ -162,6 +536,65 @@ function Umpire() {
   const [teamEditingId, setTeamEditingId] = useState('');
   const [teName, setTeName] = useState('');
   const [teLogoUrl, setTeLogoUrl] = useState('');
+
+  // Manual backfill trigger (same logic as effects) for easier admin action
+  const runBackfillLogosNow = async () => {
+    try {
+      if (!isUmpire) { setMessage('Access denied: Only an umpire can backfill logos.'); return; }
+      setMessage('Backfilling logos...');
+      // 1) Teams backfill
+      const nameToLogo = new Map([
+        ['data ninjas', '/Teams/Data Ninjas Final (1).png'],
+        ['daa ninjas', '/Teams/Data Ninjas Final (1).png'],
+        ['fintech falcons', '/Teams/Fintech Falcons Final (3).png'],
+        ['geotitans', '/Teams/Geo Titans Final (1).png'],
+        ['geo titans', '/Teams/Geo Titans Final (1).png'],
+        ['ml maverics', '/Teams/ML Mavericks Final (1).png'],
+      ]);
+      const toUpdateTeams = (Array.isArray(teams)?teams:[]).filter(t => {
+        const nm = String(t?.name||'').trim().toLowerCase();
+        const want = nameToLogo.get(nm);
+        const cur = String(t?.logoUrl || t?.logo || '').trim();
+        return want && cur !== want;
+      });
+      await Promise.all(toUpdateTeams.map(async (t) => {
+        const key = String(t.name).trim().toLowerCase();
+        let want = nameToLogo.get(key);
+        try { want = await urlToDataUrl(want); } catch {}
+        await updateDoc(doc(db,'teams', t.id), { logoUrl: want, logo: want });
+      }));
+
+      // 2) Matches backfill for currently loaded matches list
+      const teamLookup = new Map();
+      (Array.isArray(teams)?teams:[]).forEach(t => {
+        const nm = String(t?.name||'').trim().toLowerCase();
+        const url = String(t?.logoUrl || t?.logo || '').trim();
+        if (nm && url) teamLookup.set(nm, url);
+      });
+      const matchUpdates = [];
+      (Array.isArray(allMatches)?allMatches:[]).forEach(m => {
+        if (!m?.id || m.id === 'current-match') return;
+        const t1 = m.team1 || {}; const t2 = m.team2 || {};
+        const t1url = String(t1.logoUrl||'').trim();
+        const t2url = String(t2.logoUrl||'').trim();
+        const n1 = String(t1.name||'').trim().toLowerCase();
+        const n2 = String(t2.name||'').trim().toLowerCase();
+        const want1 = (!t1url && n1 && teamLookup.get(n1)) ? teamLookup.get(n1) : null;
+        const want2 = (!t2url && n2 && teamLookup.get(n2)) ? teamLookup.get(n2) : null;
+        if (want1 || want2) {
+          matchUpdates.push(updateDoc(doc(db,'matches', m.id), {
+            team1: want1 ? { ...t1, logoUrl: want1 } : t1,
+            team2: want2 ? { ...t2, logoUrl: want2 } : t2,
+            lastUpdated: new Date(),
+          }));
+        }
+      });
+      await Promise.all(matchUpdates);
+      setMessage('Logos backfilled for teams and matches.');
+    } catch (e) {
+      setMessage('Backfill failed: ' + (e?.message || String(e)));
+    }
+  };
   
   // Inline roster editor component
   const RosterEditor = ({ teamKey, roster, setRoster, locked, playersPerSide, allPlayers, otherTeamRoster }) => {
@@ -337,9 +770,8 @@ function Umpire() {
         setMessage('Target achieved. Please select Man of the Match in Awards section before the match can be completed.');
         return;
       }
-      const result = computeResult(innings);
-  await persistMatch({ status: 'completed', result, completedAt: new Date(), lastUpdated: new Date() });
-      await finalizeMatchAndUpdateStats();
+        const result = computeResult(innings);
+        await finalizeMatchAndUpdateStats({ status: 'completed', result, completedAt: new Date() });
       setMessage('Target achieved. Match completed.');
       return;
     }
@@ -354,9 +786,8 @@ function Umpire() {
           setMessage('Innings finished. Please select Man of the Match in Awards section before the match can be completed.');
           return;
         }
-        const result = computeResult(innings);
-  await persistMatch({ status: 'completed', result, completedAt: new Date(), lastUpdated: new Date() });
-        await finalizeMatchAndUpdateStats();
+          const result = computeResult(innings);
+          await finalizeMatchAndUpdateStats({ status: 'completed', result, completedAt: new Date() });
         setMessage('Innings finished. Match completed.');
       } else {
         // First innings finished -> start next innings
@@ -365,10 +796,13 @@ function Umpire() {
     }
   };
 
-  // Helper to persist match changes to Firestore (current-match and actual match doc)
+  // Helper to persist match changes to Firestore (shadow + real doc) always tagging lastUpdated
   const persistMatch = async (updates) => {
-    await updateDoc(doc(db,'matches','current-match'), updates);
-    if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), updates);
+    let stamped = { ...updates, lastUpdated: new Date() };
+    // sanitize any team objects to avoid embedding large images/data URIs
+    stamped = sanitizeMatchPayload(stamped);
+    await updateDoc(doc(db,'matches','current-match'), stamped);
+    if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), stamped);
   };
 
   // Reset match to a clean 'upcoming' state while preserving team rosters and metadata
@@ -497,15 +931,15 @@ function Umpire() {
   // Record a ball outcome with cricket rules for wides/no-balls/wickets
   const recordBall = async (outcome, extraRuns = 0) => {
     if (!currentMatch) return;
+    const st = (currentMatch.status||'').toLowerCase();
+    if (!(st === 'live' || st === 'break')) { setMessage('Match is not Live. Use Start Match first.'); return; }
     try {
       // enforce selections first
-      const batTeam = battingTeamSel || currentMatch?.battingTeam || 'team1';
       if (!strikerSel || !nonStrikerSel || !bowlerSel) {
         setMessage('Set striker, non-striker, and bowler before scoring.');
         return;
       }
   const battingKey = currentMatch?.battingTeam === 'team2' ? 'team2' : 'team1';
-  const otherKey = battingKey === 'team1' ? 'team2' : 'team1';
       const t1 = currentMatch?.team1 || { runs: 0, wickets: 0 };
       const t2 = currentMatch?.team2 || { runs: 0, wickets: 0 };
       let runsAdd = 0;
@@ -776,7 +1210,6 @@ function Umpire() {
 
   // Wicket workflow: open modal, then commit ball and lastWicket details
   const onWicketClick = () => {
-    const batKey = battingTeamSel === 'team2' ? 'team2' : 'team1';
     setWicketBatter(strikerSel || '');
     setWicketType('bowled');
     setWicketFielder('');
@@ -995,38 +1428,106 @@ function Umpire() {
       setMessage('Access denied: Only an umpire can create matches.');
       return;
     }
-    if (!team1 || !team2 || team1 === team2) {
-      setMessage('Please choose two different teams.');
+    
+    // Determine team names (custom or from dropdown)
+    const finalTeam1Name = useCustomTeam1 ? customTeam1Name.trim() : team1;
+    const finalTeam2Name = useCustomTeam2 ? customTeam2Name.trim() : team2;
+    
+    if (!finalTeam1Name || !finalTeam2Name || finalTeam1Name === finalTeam2Name) {
+      setMessage('Please provide two different team names.');
       return;
     }
+    
     try {
       setLoading(true);
       setMessage('');
-      const t1Obj = (Array.isArray(teamOptions) ? teamOptions.find(t=> t.name === team1) : null) || { name: team1 };
-      const t2Obj = (Array.isArray(teamOptions) ? teamOptions.find(t=> t.name === team2) : null) || { name: team2 };
-      const payload = {
-        title: `${team1} vs ${team2}`,
+      
+      // Get team objects or create new ones for custom names
+      let t1Obj = null;
+      let t2Obj = null;
+      
+      if (useCustomTeam1) {
+        // Check if team exists in database
+        const existing = Array.isArray(teamOptions) ? teamOptions.find(t => t.name.toLowerCase() === finalTeam1Name.toLowerCase()) : null;
+        if (existing) {
+          t1Obj = existing;
+        } else {
+          // Create new team on the fly
+          const newTeamRef = await addDoc(collection(db, 'teams'), { 
+            name: finalTeam1Name, 
+            logoUrl: '/Teams/imgImage8.png' // Default logo
+          });
+          t1Obj = { name: finalTeam1Name, logoUrl: '/Teams/imgImage8.png', id: newTeamRef.id };
+        }
+      } else {
+        t1Obj = (Array.isArray(teamOptions) ? teamOptions.find(t=> t.name === team1) : null) || { name: team1 };
+      }
+      
+      if (useCustomTeam2) {
+        // Check if team exists in database
+        const existing = Array.isArray(teamOptions) ? teamOptions.find(t => t.name.toLowerCase() === finalTeam2Name.toLowerCase()) : null;
+        if (existing) {
+          t2Obj = existing;
+        } else {
+          // Create new team on the fly
+          const newTeamRef = await addDoc(collection(db, 'teams'), { 
+            name: finalTeam2Name, 
+            logoUrl: '/Teams/imgImage8.png' // Default logo
+          });
+          t2Obj = { name: finalTeam2Name, logoUrl: '/Teams/imgImage8.png', id: newTeamRef.id };
+        }
+      } else {
+        t2Obj = (Array.isArray(teamOptions) ? teamOptions.find(t=> t.name === team2) : null) || { name: team2 };
+      }
+      
+      // Build match title with match number if provided
+      let matchTitle = `${finalTeam1Name} vs ${finalTeam2Name}`;
+      if (matchNumber) {
+        matchTitle = isFinalMatch ? `Final: ${matchTitle}` : `Match ${matchNumber}: ${matchTitle}`;
+      }
+      
+      const rawPayload = {
+        title: matchTitle,
         date,
+        startTime: startTime || null,
         venue,
         venueMapUrl: venueMapUrl || null,
-  totalOvers: parseInt(totalOvers) || 20,
-  numPlayers: parseInt(playersPerSideSetup) || 11,
-  playersPerSide: parseInt(playersPerSideSetup) || 11,
-        team1: { name: t1Obj.name, logoUrl: t1Obj.logoUrl || t1Obj.logo, runs: 0, wickets: 0, overs: 0 },
-        team2: { name: t2Obj.name, logoUrl: t2Obj.logoUrl || t2Obj.logo, runs: 0, wickets: 0, overs: 0 },
+        totalOvers: parseInt(totalOvers) || 20,
+        numPlayers: parseInt(playersPerSideSetup) || 11,
+        playersPerSide: parseInt(playersPerSideSetup) || 11,
+        team1: { name: t1Obj.name, logoUrl: t1Obj.logoUrl || t1Obj.logo, runs: 0, wickets: 0, overs: 0, players: [] },
+        team2: { name: t2Obj.name, logoUrl: t2Obj.logoUrl || t2Obj.logo, runs: 0, wickets: 0, overs: 0, players: [] },
         status: 'upcoming',
         currentOver: 0,
         currentBall: 0,
         recentBalls: [],
         result: null,
         lastUpdated: new Date(),
+        // Add tournament tracking fields
+        matchNumber: matchNumber ? parseInt(matchNumber) : null,
+        isFinalMatch: isFinalMatch,
+        bracketInfo: isFinalMatch ? {
+          winnerOfMatch1: winnerOfMatch1 ? parseInt(winnerOfMatch1) : null,
+          winnerOfMatch2: winnerOfMatch2 ? parseInt(winnerOfMatch2) : null
+        } : null,
       };
+      const payload = sanitizeMatchPayload(rawPayload);
       const ref = await addDoc(collection(db, 'matches'), payload);
       if (makeCurrent) {
         await setDoc(doc(db, 'matches', 'current-match'), { ...payload, id: ref.id, status: 'upcoming', lastUpdated: new Date() });
       }
       setCreatedId(ref.id);
       setMessage('Match created successfully.');
+      
+      // Reset custom team toggles after successful creation
+      setUseCustomTeam1(false);
+      setUseCustomTeam2(false);
+      setCustomTeam1Name('');
+      setCustomTeam2Name('');
+      setMatchNumber('');
+      setIsFinalMatch(false);
+      setWinnerOfMatch1('');
+      setWinnerOfMatch2('');
     } catch (e) {
       setMessage('Error creating match: ' + (e?.message || String(e)));
     } finally {
@@ -1034,9 +1535,61 @@ function Umpire() {
     }
   };
 
+  // Determine initial batting team based on toss info
+  const computeInitialBattingTeamFrom = (matchDoc) => {
+    try {
+      if (matchDoc?.toss?.winner && matchDoc?.toss?.decision) {
+        const w = matchDoc.toss.winner; // 'team1' | 'team2'
+        const d = matchDoc.toss.decision; // 'bat' | 'bowl'
+        return d === 'bat' ? w : (w === 'team1' ? 'team2' : 'team1');
+      }
+    } catch {}
+    return 'team1';
+  };
+
+  // Transition a match to live: seed innings if missing and set battingTeam
+  const transitionToLive = async (matchDoc) => {
+    if (!matchDoc?.id) { setMessage('Cannot go live: missing match id.'); return; }
+    // Require both rosters locked if structure present
+    const t1LockedNow = !!matchDoc?.team1?.rosterLocked;
+    const t2LockedNow = !!matchDoc?.team2?.rosterLocked;
+    if (!t1LockedNow || !t2LockedNow) { setMessage('Lock both teams before setting live.'); return; }
+    const initialBatting = computeInitialBattingTeamFrom(matchDoc);
+    let innings = Array.isArray(matchDoc?.innings) ? matchDoc.innings.slice() : [];
+    const alreadySeeded = innings.some(i => i && i.teamKey === initialBatting);
+    if (!alreadySeeded) {
+      const teamName = (initialBatting === 'team1' ? matchDoc?.team1?.name : matchDoc?.team2?.name) || initialBatting;
+      innings.push({ teamKey: initialBatting, teamName, batting: [], bowling: [], battingOrder: [], total: { runs: 0, wickets: 0, overs: '0.0', extras: { wides: 0, noBalls: 0, byes: 0, legByes: 0, penalties: 0 } } });
+    }
+    const liveUpdates = { status: 'live', battingTeam: initialBatting, innings, lastUpdated: new Date(), liveTick: Date.now() };
+    try {
+      const realRef = doc(db, 'matches', matchDoc.id);
+      const shadowRef = doc(db, 'matches', 'current-match');
+      const batch = writeBatch(db);
+      batch.set(realRef, liveUpdates, { merge: true });
+      // Keep the shadow doc pointing at real match id
+      batch.set(shadowRef, { ...liveUpdates, id: matchDoc.id }, { merge: true });
+      await batch.commit();
+      setMessage('Match set to Live.');
+    } catch (e) {
+      setMessage('Error setting live: ' + (e?.message || String(e)));
+    }
+  };
+
   const setStatus = async (matchId, status) => {
     try {
-      await updateDoc(doc(db, 'matches', matchId), { status });
+      if (status === 'live') {
+        // Read match doc to get full state then transition
+        const snap = await getDoc(doc(db, 'matches', matchId));
+        const data = snap.exists() ? { ...snap.data(), id: matchId } : { id: matchId };
+        await transitionToLive(data);
+        return;
+      }
+      const payload = { status, liveTick: status==='live'? Date.now(): null, lastUpdated: new Date() };
+      await updateDoc(doc(db, 'matches', matchId), payload);
+      if (currentMatch && (currentMatch.id === matchId || (!currentMatch.id && matchId === 'current-match'))) {
+        await updateDoc(doc(db, 'matches', 'current-match'), payload);
+      }
       setMessage(`Status set to '${status}'.`);
     } catch (e) {
       setMessage('Error updating status: ' + (e?.message || String(e)));
@@ -1046,7 +1599,7 @@ function Umpire() {
   const setAsCurrent = async (matchDoc) => {
     try {
       // Preserve the actual match id on the shadow doc so future updates also write to the real match document
-      const payload = { ...matchDoc };
+      const payload = sanitizeMatchPayload({ ...matchDoc });
       await setDoc(doc(db, 'matches', 'current-match'), { ...payload, id: matchDoc.id, lastUpdated: new Date() });
       setMessage(`'${matchDoc.title}' set as current match.`);
     } catch (e) {
@@ -1057,9 +1610,26 @@ function Umpire() {
   const setCurrentAndLive = async (matchDoc) => {
     try {
       // Keep the id to allow persistMatch() to update the underlying match doc during live scoring
-      const payload = { ...matchDoc };
-      await setDoc(doc(db, 'matches', 'current-match'), { ...payload, id: matchDoc.id, status: 'live', lastUpdated: new Date() });
-      await updateDoc(doc(db, 'matches', matchDoc.id), { status: 'live' });
+      const payload = sanitizeMatchPayload({ ...matchDoc });
+      const now = new Date();
+      // Ensure shadow doc contains the real match id and a tick so clients detect changes
+      await setDoc(doc(db, 'matches', 'current-match'), { ...payload, id: matchDoc.id, status: 'live', lastUpdated: now, liveTick: now.getTime() });
+      // Update the real match document status and a lastUpdated tick to force listeners
+      await updateDoc(doc(db, 'matches', matchDoc.id), { status: 'live', lastUpdated: now, liveTick: now.getTime() });
+
+      // Verify write succeeded (read back) and retry once if necessary
+      try {
+        const snap = await getDoc(doc(db, 'matches', matchDoc.id));
+        const d = snap.exists() ? snap.data() : null;
+        if (!d || (d.status || '').toLowerCase() !== 'live') {
+          // retry update
+          const now2 = new Date();
+          await updateDoc(doc(db, 'matches', matchDoc.id), { status: 'live', lastUpdated: now2, liveTick: now2.getTime() });
+          await setDoc(doc(db, 'matches', 'current-match'), { ...payload, id: matchDoc.id, status: 'live', lastUpdated: now2, liveTick: now2.getTime() });
+        }
+      } catch (e) {
+        // non-fatal; continue
+      }
       setMessage(`'${matchDoc.title}' set as current & live.`);
     } catch (e) {
       setMessage('Error setting current & live: ' + (e?.message || String(e)));
@@ -1073,6 +1643,19 @@ function Umpire() {
     // normalize date to YYYY-MM-DD if possible
     const d = typeof m.date === 'string' ? m.date : (m?.date?.toDate ? m.date.toDate().toISOString().slice(0,10) : (m?.date?.seconds ? new Date(m.date.seconds*1000).toISOString().slice(0,10) : ''));
     setEditDate(d || '');
+    // normalize startTime (HH:MM) from stored startTime or startAt epoch
+    try {
+      if (m?.startTime) {
+        setEditStartTime(String(m.startTime));
+      } else if (m?.startAt) {
+        const dt = new Date(m.startAt);
+        if (!isNaN(dt.getTime())) {
+          const hh = String(dt.getHours()).padStart(2,'0');
+          const mm = String(dt.getMinutes()).padStart(2,'0');
+          setEditStartTime(`${hh}:${mm}`);
+        } else setEditStartTime('');
+      } else setEditStartTime('');
+    } catch(e) { setEditStartTime(''); }
     setEditVenue(m.venue || '');
     setEditOvers(String(m.totalOvers || 20));
   };
@@ -1091,6 +1674,7 @@ function Umpire() {
       const updates = {
         title: editTitle,
         date: editDate,
+        startTime: editStartTime || null,
         venue: editVenue,
         totalOvers: parseInt(editOvers)||20,
         lastUpdated: new Date(),
@@ -1129,8 +1713,12 @@ function Umpire() {
   };
 
   // Finalize match and update cumulative player stats in 'players' and 'playerProfiles'
-  const finalizeMatchAndUpdateStats = async () => {
+  const finalizeMatchAndUpdateStats = async (extraMatchUpdates = null) => {
+    if (finalizing) return; // prevent re-entry
+    setFinalizing(true);
     try {
+      // Flush queued writes first to avoid stale live state
+      try { await immediateFlush(); } catch {}
       const inns = Array.isArray(currentMatch?.innings) ? currentMatch.innings : [];
       const t1Roster = Array.isArray(currentMatch?.team1?.players) ? currentMatch.team1.players : [];
       const t2Roster = Array.isArray(currentMatch?.team2?.players) ? currentMatch.team2.players : [];
@@ -1138,19 +1726,49 @@ function Umpire() {
       const agg = {}; // per-player aggregates for this match
       inns.forEach(inn => {
         const batting = Array.isArray(inn.batting) ? inn.batting : [];
+        // Determine fielding roster for this innings (opposite of batting team)
+        const battingKey = inn && inn.teamKey ? inn.teamKey : null;
+        const fieldRoster = (battingKey === 'team1') ? t2Roster : (battingKey === 'team2' ? t1Roster : [...t1Roster, ...t2Roster]);
+
         batting.forEach(b => {
           const pid = b.playerId || b.id; if (!pid) return;
-          if (!agg[pid]) agg[pid] = { batRuns:0, batBalls:0, fours:0, sixes:0, hs:0, bowlWkts:0, bowlBalls:0, bowlRuns:0, dots:0, maidens:0, best:0 };
+          if (!agg[pid]) agg[pid] = { batRuns:0, batBalls:0, fours:0, sixes:0, hs:0, bowlWkts:0, bowlBalls:0, bowlRuns:0, dots:0, maidens:0, best:0, catches:0, stumpings:0, runOutDirect:0, runOutIndirect:0 };
           agg[pid].batRuns += (parseInt(b.runs)||0);
           agg[pid].batBalls += (parseInt(b.balls)||0);
           agg[pid].fours += (parseInt(b.fours)||0);
           agg[pid].sixes += (parseInt(b.sixes)||0);
           agg[pid].hs = Math.max(agg[pid].hs, (parseInt(b.runs)||0));
+
+          // Attribute fielding events from howOut if present
+          try {
+            const ho = b.howOut || b.status || null;
+            if (ho && typeof ho === 'object' && ho.type) {
+              const ht = String(ho.type || '').toLowerCase();
+              // try to resolve fielder id (prefer explicit id, else match by name against fieldRoster)
+              let fPid = ho.fielderId || ho.fielderId || null;
+              if (!fPid && ho.fielder) {
+                const fName = String(ho.fielder || '').trim().toLowerCase();
+                const found = fieldRoster.find(p => (String(p.id || p.playerId || '').toLowerCase() === fName) || (String(p.name || '').trim().toLowerCase() === fName));
+                if (found) fPid = found.id || found.playerId;
+              }
+              if (fPid) {
+                if (!agg[fPid]) agg[fPid] = { batRuns:0, batBalls:0, fours:0, sixes:0, hs:0, bowlWkts:0, bowlBalls:0, bowlRuns:0, dots:0, maidens:0, best:0, catches:0, stumpings:0, runOutDirect:0, runOutIndirect:0 };
+                if (ht === 'caught') {
+                  agg[fPid].catches = (agg[fPid].catches || 0) + 1;
+                } else if (ht === 'stumped') {
+                  agg[fPid].stumpings = (agg[fPid].stumpings || 0) + 1;
+                } else if (ht === 'run out' || ht === 'runout' || ht === 'run-out') {
+                  agg[fPid].runOutDirect = (agg[fPid].runOutDirect || 0) + 1;
+                }
+              }
+            }
+          } catch (err) { /* ignore field attribution errors */ }
         });
+
         const bowling = Array.isArray(inn.bowling) ? inn.bowling : [];
         bowling.forEach(bw => {
           const pid = bw.playerId || bw.id; if (!pid) return;
-          if (!agg[pid]) agg[pid] = { batRuns:0, batBalls:0, fours:0, sixes:0, hs:0, bowlWkts:0, bowlBalls:0, bowlRuns:0, dots:0, maidens:0, best:0 };
+          if (!agg[pid]) agg[pid] = { batRuns:0, batBalls:0, fours:0, sixes:0, hs:0, bowlWkts:0, bowlBalls:0, bowlRuns:0, dots:0, maidens:0, best:0, catches:0, stumpings:0, runOutDirect:0, runOutIndirect:0 };
           const wk = parseInt(bw.wickets)||0;
           agg[pid].bowlWkts += wk;
           agg[pid].bowlBalls += (parseInt(bw.balls)||0);
@@ -1161,7 +1779,17 @@ function Umpire() {
         });
       });
 
-      // Update each player: players (increments) and playerProfiles (absolute totals + rates)
+      // Batch updates to avoid write stream exhaustion (players + profiles + final match updates)
+      const BATCH_LIMIT = 400; // Firestore max 500 ops; keep headroom
+      let batch = writeBatch(db);
+      let ops = 0;
+      const commitBatch = async () => {
+        if (ops === 0) return;
+        try { await batch.commit(); } catch (err) { console.warn('Batch commit failed:', err); }
+        batch = writeBatch(db);
+        ops = 0;
+      };
+
       for (const pid of playedIds) {
         const a = agg[pid] || { batRuns:0, batBalls:0, fours:0, sixes:0, hs:0, bowlWkts:0, bowlBalls:0, bowlRuns:0, dots:0, maidens:0, best:0 };
         // Read existing players doc to compute derived rates/bands for fantasy points
@@ -1184,25 +1812,35 @@ function Umpire() {
         const plEco = plOvers > 0 ? (plRunsConc / plOvers) : null;
         const plHS = Math.max(parseInt(prevPlayers.highestScore)||0, a.hs||0);
         const plBest = Math.max(parseInt(prevPlayers.bestWickets)||0, a.best||0);
-        try {
-          await updateDoc(doc(db, 'players', pid), {
-            matches: increment(1),
-            runs: plRuns,
-            wickets: plWkts,
-            fours: plFours,
-            sixes: plSixes,
-            ballsFaced: plBallsFaced,
-            ballsBowled: plBallsBowled,
-            oversBowled: plOvers,
-            runsConceded: plRunsConc,
-            dotBalls: plDotBalls,
-            maidens: plMaidens,
-            highestScore: plHS,
-            bestWickets: plBest,
-            strikeRate: plStrike != null ? Math.round(plStrike * 100) / 100 : null,
-            economy: plEco != null ? Math.round(plEco * 100) / 100 : null,
-          });
-        } catch {}
+        // Player doc update (use update; fallback to set merge if missing on commit automatically)
+        const plCatches = (parseInt(prevPlayers.catches)||0) + (a.catches||0);
+        const plStumpings = (parseInt(prevPlayers.stumpings)||0) + (a.stumpings||0);
+        const plRunOutDirect = (parseInt(prevPlayers.runOutDirect)||0) + (a.runOutDirect||0);
+        const plRunOutIndirect = (parseInt(prevPlayers.runOutIndirect)||0) + (a.runOutIndirect||0);
+        batch.set(doc(db, 'players', pid), {
+          // using set + merge to avoid failing if doc is missing
+          matches: (prevPlayers.matches || 0) + 1, // we can't use increment reliably inside batch & merge for unknown docs
+          runs: plRuns,
+          wickets: plWkts,
+          fours: plFours,
+          sixes: plSixes,
+          ballsFaced: plBallsFaced,
+          ballsBowled: plBallsBowled,
+          oversBowled: plOvers,
+          runsConceded: plRunsConc,
+          dotBalls: plDotBalls,
+          maidens: plMaidens,
+          highestScore: plHS,
+          bestWickets: plBest,
+          strikeRate: plStrike != null ? Math.round(plStrike * 100) / 100 : null,
+          economy: plEco != null ? Math.round(plEco * 100) / 100 : null,
+          // Fielding
+          catches: plCatches,
+          stumpings: plStumpings,
+          runOutDirect: plRunOutDirect,
+          runOutIndirect: plRunOutIndirect,
+        }, { merge: true });
+        ops++;
 
         // Read profile to compute derived rates and maxima; create if missing baseline
         let prev = {};
@@ -1227,6 +1865,11 @@ function Umpire() {
         const strikeRate = totalBallsFaced > 0 ? (totalRuns * 100) / totalBallsFaced : null;
         const economy = oversBowled > 0 ? (runsConcededTotal / oversBowled) : null;
 
+        const totalCatches = (parseInt(prev.catches)||0) + (a.catches||0);
+        const totalStumpings = (parseInt(prev.stumpings)||0) + (a.stumpings||0);
+        const totalRunOutDirect = (parseInt(prev.runOutDirect)||0) + (a.runOutDirect||0);
+        const totalRunOutIndirect = (parseInt(prev.runOutIndirect)||0) + (a.runOutIndirect||0);
+
         const profileUpdates = {
           totalMatches: increment(1),
           totalRuns,
@@ -1241,25 +1884,57 @@ function Umpire() {
           dotBalls,
           maidens,
           bestWickets,
+          // Fielding totals
+          catches: totalCatches,
+          stumpings: totalStumpings,
+          runOutDirect: totalRunOutDirect,
+          runOutIndirect: totalRunOutIndirect,
           // Store rounded rates to 2 decimals for display consistency
           strikeRate: strikeRate != null ? Math.round(strikeRate * 100) / 100 : null,
           economy: economy != null ? Math.round(economy * 100) / 100 : null,
         };
-        try {
-          await updateDoc(doc(db, 'playerProfiles', pid), profileUpdates);
-        } catch {
-          try { await setDoc(doc(db, 'playerProfiles', pid), profileUpdates, { merge: true }); } catch {}
+        batch.set(doc(db, 'playerProfiles', pid), profileUpdates, { merge: true });
+        ops++;
+        if (ops >= BATCH_LIMIT) {
+          await commitBatch();
         }
       }
-      // Unlock teams in Firestore after match completion
-      const t1 = currentMatch?.team1 ? { ...currentMatch.team1, rosterLocked: false } : { rosterLocked: false };
-      const t2 = currentMatch?.team2 ? { ...currentMatch.team2, rosterLocked: false } : { rosterLocked: false };
-      await persistMatch({ team1: t1, team2: t2 });
+      // Prepare final match updates (status/result/etc) merged with team unlock if requested
+      const t1Unlocked = currentMatch?.team1 ? { ...currentMatch.team1, rosterLocked: false } : { rosterLocked: false };
+      const t2Unlocked = currentMatch?.team2 ? { ...currentMatch.team2, rosterLocked: false } : { rosterLocked: false };
+      const finalMatchUpdates = {
+        team1: t1Unlocked,
+        team2: t2Unlocked,
+        lastUpdated: new Date(),
+        ...(extraMatchUpdates || {})
+      };
+      const safeFinalMatchUpdates = sanitizeMatchPayload(finalMatchUpdates);
+
+      // Only apply final match updates here if we have a current match context
+      batch.set(doc(db,'matches','current-match'), safeFinalMatchUpdates, { merge: true }); ops++;
+      if (currentMatch?.id) { batch.set(doc(db,'matches', currentMatch.id), safeFinalMatchUpdates, { merge: true }); ops++; }
+      await commitBatch();
+      // Verify status write succeeded; retry minimally if mismatch
+      try {
+        if (extraMatchUpdates?.status && currentMatch?.id) {
+          const desired = String(extraMatchUpdates.status).toLowerCase();
+            const snap = await getDoc(doc(db,'matches', currentMatch.id));
+            const cur = snap.exists()? snap.data(): null;
+            if (!cur || String(cur.status||'').toLowerCase() !== desired) {
+              const retry = { status: extraMatchUpdates.status, lastUpdated: new Date(), liveTick: desired==='live'? Date.now(): null };
+              const b2 = writeBatch(db);
+              b2.set(doc(db,'matches','current-match'), retry, { merge: true });
+              b2.set(doc(db,'matches', currentMatch.id), retry, { merge: true });
+              await b2.commit();
+            }
+        }
+      } catch {}
       // Reset control form selections after match completion
       resetControlFormSelections();
     } catch (e) {
       console.warn('Error updating player stats:', e);
     }
+    setFinalizing(false);
   };
 
   // Helper function to reset all control panel selections
@@ -1288,6 +1963,7 @@ function Umpire() {
     setOvrBall('');
   };
 
+  // Simplified player creation: remove custom photo upload persistence (defaults only)
   const createPlayer = async (e) => {
     e.preventDefault();
     if (!isUmpire) { setMessage('Access denied: Only an umpire can create players.'); return; }
@@ -1299,18 +1975,24 @@ function Umpire() {
     try {
       setLoading(true);
       setMessage('');
-      // Only persist avatar if it's a custom uploaded URL (not the gender default)
+      // Always use gender defaults; do not store large base64 avatars
       const defaultMale = '/Teams/imgImage8.png';
       const defaultFemale = '/Teams/imgImage48.png';
-      const avatarVal = (pAvatar || '').trim();
-      const isDefaultAvatar = avatarVal === defaultMale || avatarVal === defaultFemale;
+      // avatarVal omitted (no custom avatar persistence)
+      // assign special 3D models for known players
+      const normalized = (pName || '').toLowerCase();
+      let chosenModel = '/model.glb';
+      if (normalized.includes('ayush')) chosenModel = '/models/Ayush.glb';
+      if (normalized.includes('shubhankit') || normalized.includes('shubhan')) chosenModel = '/models/Shubhankit.glb';
+
       const payload = {
         name: pName.trim(),
         age: ageNum,
         gender: pGender,
-        ...(avatarVal && !isDefaultAvatar ? { avatar: avatarVal } : {}),
+        // no custom avatar persistence
         role: pRole,
         battingStyle: pBattingStyle,
+        bowlingStyle: pBowlingStyle,
         // default stats so Players page shows values
         matches: 0,
         runs: 0,
@@ -1318,13 +2000,13 @@ function Umpire() {
         strikeRate: 0,
         createdAt: new Date(),
         // Default 3D model placeholder until a custom one is uploaded
-        modelUrl: '/model.glb',
+        modelUrl: chosenModel,
       };
       if (Number.isFinite(jerseyNum)) payload.jerseyNumber = jerseyNum;
       if (pStatus === 'unavailable') payload.status = 'unavailable';
       await addDoc(collection(db, 'players'), payload);
       setMessage('Player created successfully.');
-  setPName(''); setPAge(''); setPGender('male'); setPAvatar('/Teams/imgImage8.png'); setPStatus('available'); setPRole('batsman'); setPBattingStyle('right-handed');
+  setPName(''); setPAge(''); setPGender('male'); setPAvatar('/Teams/imgImage8.png'); setPStatus('available'); setPRole('batsman'); setPBattingStyle('right-handed'); setPBowlingStyle('right-arm');
       setPJerseyNumber('');
     } catch (e) {
       setMessage('Error creating player: ' + (e?.message || String(e)));
@@ -1349,29 +2031,24 @@ function Umpire() {
 
   
 
+  // Simplified team creation: drop custom PNG/base64 upload (stability on mobile)
   const createTeam = async (e) => {
     e.preventDefault();
     if (!isUmpire) { setMessage('Access denied: Only an umpire can create teams.'); return; }
+    if (Array.isArray(teams) && teams.length >= 4) { setMessage('Team limit reached (4).'); return; }
     if (!tName.trim()) { setMessage('Error: Team name is required.'); return; }
     try {
       setTLoading(true);
-      let logoToSave = tLogoUrl || '';
-      // If a file was selected but not yet converted, convert it now.
-      if (tLogoFile && !logoToSave) {
-        setTUploading(true);
-        try {
-          const dataUrl = await readImageInline(tLogoFile);
-          logoToSave = dataUrl || '';
-          setTLogoUrl(logoToSave);
-          try { setTLogoPreview(logoToSave); } catch {}
-        } catch (err) {
-          console.error('Team logo read failed', err);
-          setMessage('Error reading logo: ' + (err?.message || String(err)));
-        } finally {
-          setTUploading(false);
-        }
-      }
-      const payload = { name: tName.trim(), logoUrl: logoToSave || '' };
+      // Map known team names to bundled assets; fallback generic icon
+      const norm = tName.trim().toLowerCase();
+      const mapped = (() => {
+        if (norm.includes('data') && norm.includes('ninja')) return '/Teams/Data Ninjas Final (1).png';
+        if (norm.includes('fintech')) return '/Teams/Fintech Falcons Final (3).png';
+        if (norm.includes('geo') && norm.includes('titan')) return '/Teams/Geo Titans Final (1).png';
+        if (norm.includes('maver')) return '/Teams/ML Mavericks Final (1).png';
+        return '/Teams/imgImage48.png';
+      })();
+      const payload = { name: tName.trim(), logoUrl: mapped, logo: mapped };
       await addDoc(collection(db, 'teams'), payload);
       setMessage('Team created successfully.');
       try { window.alert('Team created successfully.'); } catch {}
@@ -1424,7 +2101,6 @@ function Umpire() {
           <h1 className="text-4xl font-bold text-gray-900">Umpire</h1>
           <p className="text-gray-600">Quick setup and match management</p>
         </div>
-
         {/* Tabs */}
         <div className="bg-white rounded-lg shadow mb-6">
           <div className="border-b border-gray-200">
@@ -1463,35 +2139,137 @@ function Umpire() {
         <form onSubmit={createMatch} className="bg-white rounded-lg shadow p-6 space-y-4">
           {teamOptions.length === 0 && (
             <div className="mb-3 p-3 rounded border border-yellow-300 bg-yellow-50 text-yellow-800 text-sm">
-              No teams found. Please create teams in the Teams tab before creating a match.
+              No teams found. You can still create a match by entering custom team names below, or create teams in the Teams tab.
             </div>
           )}
+          
+          {/* Match Number Section */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <h3 className="text-sm font-semibold text-blue-900 mb-3">Tournament Info (Optional)</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm text-gray-700 mb-1">Match Number</label>
+                <input 
+                  type="number" 
+                  min="1" 
+                  className="w-full border rounded px-3 py-2" 
+                  value={matchNumber} 
+                  onChange={e=>setMatchNumber(e.target.value)} 
+                  placeholder="e.g., 1, 2, 3" 
+                />
+                <p className="text-xs text-gray-500 mt-1">Leave empty for friendly matches</p>
+              </div>
+              <div className="flex items-center">
+                <label className="inline-flex items-center gap-2 cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={isFinalMatch} 
+                    onChange={e=>setIsFinalMatch(e.target.checked)} 
+                  />
+                  <span className="text-sm font-medium">Final Match</span>
+                </label>
+              </div>
+            </div>
+            
+            {isFinalMatch && (
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1">Winner of Match #</label>
+                  <input 
+                    type="number" 
+                    min="1" 
+                    className="w-full border rounded px-3 py-2" 
+                    value={winnerOfMatch1} 
+                    onChange={e=>setWinnerOfMatch1(e.target.value)} 
+                    placeholder="e.g., 1" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1">vs Winner of Match #</label>
+                  <input 
+                    type="number" 
+                    min="1" 
+                    className="w-full border rounded px-3 py-2" 
+                    value={winnerOfMatch2} 
+                    onChange={e=>setWinnerOfMatch2(e.target.value)} 
+                    placeholder="e.g., 2" 
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Team Selection */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm text-gray-700 mb-1">Team 1</label>
-              <select className="w-full border rounded px-3 py-2" value={team1} onChange={(e)=>{ setTeam1(e.target.value); if (e.target.value === team2) setTeam2(otherOf(e.target.value)); }} disabled={teamOptions.length===0}>
-                {teamOptions.length===0 ? (
-                  <option value="">No teams available</option>
-                ) : (
-                  teamOptions.map(t=> <option key={t.id||t.name} value={t.name}>{t.name}</option>)
-                )}
-              </select>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm text-gray-700">Team 1</label>
+                <label className="inline-flex items-center gap-1 text-xs cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={useCustomTeam1} 
+                    onChange={e=>setUseCustomTeam1(e.target.checked)} 
+                  />
+                  <span>Custom Name</span>
+                </label>
+              </div>
+              {useCustomTeam1 ? (
+                <input 
+                  type="text" 
+                  className="w-full border rounded px-3 py-2" 
+                  value={customTeam1Name} 
+                  onChange={e=>setCustomTeam1Name(e.target.value)} 
+                  placeholder="Enter custom team name" 
+                  required 
+                />
+              ) : (
+                <select className="w-full border rounded px-3 py-2" value={team1} onChange={(e)=>{ setTeam1(e.target.value); if (e.target.value === team2) setTeam2(otherOf(e.target.value)); }} disabled={teamOptions.length===0}>
+                  {teamOptions.length===0 ? (
+                    <option value="">No teams available</option>
+                  ) : (
+                    teamOptions.map(t=> <option key={t.id||t.name} value={t.name}>{t.name}</option>)
+                  )}
+                </select>
+              )}
             </div>
             <div>
-              <label className="block text-sm text-gray-700 mb-1">Team 2</label>
-              <select className="w-full border rounded px-3 py-2" value={team2} onChange={(e)=>{ setTeam2(e.target.value); if (e.target.value === team1) setTeam1(otherOf(e.target.value)); }} disabled={teamOptions.length<2}>
-                {teamOptions.length===0 ? (
-                  <option value="">No teams available</option>
-                ) : (
-                  teamOptions.map(t=> <option key={t.id||t.name} value={t.name}>{t.name}</option>)
-                )}
-              </select>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm text-gray-700">Team 2</label>
+                <label className="inline-flex items-center gap-1 text-xs cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={useCustomTeam2} 
+                    onChange={e=>setUseCustomTeam2(e.target.checked)} 
+                  />
+                  <span>Custom Name</span>
+                </label>
+              </div>
+              {useCustomTeam2 ? (
+                <input 
+                  type="text" 
+                  className="w-full border rounded px-3 py-2" 
+                  value={customTeam2Name} 
+                  onChange={e=>setCustomTeam2Name(e.target.value)} 
+                  placeholder="Enter custom team name" 
+                  required 
+                />
+              ) : (
+                <select className="w-full border rounded px-3 py-2" value={team2} onChange={(e)=>{ setTeam2(e.target.value); if (e.target.value === team1) setTeam1(otherOf(e.target.value)); }} disabled={teamOptions.length<2}>
+                  {teamOptions.length===0 ? (
+                    <option value="">No teams available</option>
+                  ) : (
+                    teamOptions.map(t=> <option key={t.id||t.name} value={t.name}>{t.name}</option>)
+                  )}
+                </select>
+              )}
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={swapTeams} className="text-sm text-blue-700 underline">Swap</button>
-          </div>
+          {!useCustomTeam1 && !useCustomTeam2 && (
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={swapTeams} className="text-sm text-blue-700 underline">Swap Teams</button>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -1502,6 +2280,14 @@ function Umpire() {
               <label className="block text-sm text-gray-700 mb-1">Date</label>
               <input type="date" className="w-full border rounded px-3 py-2" value={date} onChange={e=>setDate(e.target.value)} required />
             </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Start Time</label>
+              <input type="time" className="w-full border rounded px-3 py-2" value={startTime} onChange={e=>setStartTime(e.target.value)} />
+            </div>
+            <div />
           </div>
 
           <div>
@@ -1538,7 +2324,16 @@ function Umpire() {
           </div>
 
           <div className="flex items-center gap-3">
-            <button type="submit" disabled={loading || teamOptions.length<2 || !team1 || !team2 || team1===team2} className="btn-primary disabled:opacity-50">
+            <button 
+              type="submit" 
+              disabled={loading || (
+                (!useCustomTeam1 && !useCustomTeam2 && (teamOptions.length<2 || !team1 || !team2 || team1===team2)) ||
+                (useCustomTeam1 && !customTeam1Name.trim()) ||
+                (useCustomTeam2 && !customTeam2Name.trim()) ||
+                (useCustomTeam1 && useCustomTeam2 && customTeam1Name.trim() === customTeam2Name.trim())
+              )} 
+              className="btn-primary disabled:opacity-50"
+            >
               {loading ? 'Creating…' : 'Create Match'}
             </button>
           </div>
@@ -1556,18 +2351,8 @@ function Umpire() {
                       <input type="text" className="w-full border rounded px-3 py-2" value={tName} onChange={e=> setTName(e.target.value)} placeholder="Enter team name" required />
                     </div>
                     <div className="sm:col-span-1">
-                      <label className="block text-sm text-gray-700 mb-1">Upload Logo</label>
-                      <input type="file" accept="image/*" onChange={(e)=>{
-                        const file = e.target.files && e.target.files[0];
-                        if (!file) return;
-                        try {
-                          try { const localUrl = URL.createObjectURL(file); setTLogoPreview(localUrl); } catch {}
-                          setTLogoFile(file);
-                          setMessage('Logo selected. It will be uploaded when you create the team.');
-                        } catch (err) {
-                          setMessage('Error preparing logo: ' + (err?.message || String(err)));
-                        }
-                      }} />
+                      <label className="block text-sm text-gray-700 mb-1">(Logo auto-mapped)</label>
+                      <div className="text-xs text-gray-500">Custom upload disabled. Known names get official logos.</div>
                     </div>
                     <div className="sm:col-span-1 flex items-center gap-3">
                       {(tLogoPreview || tLogoUrl) ? (
@@ -1585,7 +2370,15 @@ function Umpire() {
                 <div className="mt-6">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-xl font-semibold">All Teams</h3>
-                    <div className="text-sm text-gray-500">{Array.isArray(teams)?teams.length:0} total</div>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm"
+                        onClick={runBackfillLogosNow}
+                        title="Write known team logos into Firestore and update existing matches"
+                      >Backfill Logos</button>
+                      <div className="text-sm text-gray-500">{Array.isArray(teams)?teams.length:0} total</div>
+                    </div>
                   </div>
                   {(!Array.isArray(teams) || teams.length===0) ? (
                     <div className="text-sm text-gray-500">No teams yet. Create your first team above.</div>
@@ -1611,20 +2404,7 @@ function Umpire() {
                                   <label className="block text-xs text-gray-600">Team Name</label>
                                   <input className="w-full border rounded px-2 py-1 text-sm" value={teName} onChange={e=> setTeName(e.target.value)} />
                                 </div>
-                                <div className="flex items-center gap-2">
-                                  <label className="text-xs text-gray-600">Upload New Logo</label>
-                                  <input type="file" accept="image/*" onChange={async(e)=>{
-                                    const file = e.target.files && e.target.files[0];
-                                    if (!file) return;
-                                    try {
-                                      try { const local = URL.createObjectURL(file); setTLogoPreview(local); } catch {}
-                                      const dataUrl = await readImageInline(file);
-                                      setTeLogoUrl(dataUrl);
-                                    } catch (err) {
-                                      setMessage('Error uploading logo: ' + (err?.message || String(err)));
-                                    }
-                                  }} />
-                                </div>
+                                <div className="text-xs text-gray-500">Logo editing disabled (auto-mapped).</div>
                                 {(tLogoPreview || teLogoUrl) && (
                                   <div className="mt-2">
                                     <img src={tLogoPreview || teLogoUrl} alt="team logo preview" className="w-12 h-12 rounded border object-cover" />
@@ -1670,17 +2450,60 @@ function Umpire() {
                       <div className="text-sm text-gray-500 py-4">No matches.</div>
                     ) : (
                       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                        {sec.list.map((m)=> {
+                        {Array.from(new Map(sec.list.map(m => [m.id, m])).values()).map((m)=> {
                           const rostersReady = !!(m?.team1?.rosterLocked && m?.team2?.rosterLocked);
                           const isEditing = editingId === m.id;
                           return (
                           <div key={m.id} className="bg-white border border-gray-200 rounded-lg p-4 flex flex-col">
                             {!isEditing ? (
                               <>
-                              <p>Match id {m.id}</p>
-                                <div className="text-xs text-gray-500">{m.date} • {m.venue}</div>
+                              <div className="flex items-center justify-between">
+                                <p className="text-xs text-gray-400">Match id {m.id}</p>
+                                {m.matchNumber && (
+                                  <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${m.isFinalMatch ? 'bg-yellow-100 text-yellow-800 border border-yellow-300' : 'bg-purple-100 text-purple-700'}`}>
+                                    {m.isFinalMatch ? '🏆 FINAL' : `Match #${m.matchNumber}`}
+                                  </span>
+                                )}
+                              </div>
+                                  <div className="text-xs text-gray-500 mt-1">
+                                    {(() => {
+                                      try {
+                                        // Derive display time and start Date object
+                                        let displayTime = m.startTime || null;
+                                        let startDate = null;
+                                        if (m.startAt) {
+                                          startDate = new Date(m.startAt);
+                                          if (!isNaN(startDate.getTime())) {
+                                            displayTime = displayTime || startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                          } else startDate = null;
+                                        } else if (m.date && m.startTime) {
+                                          const cand = new Date(`${m.date}T${m.startTime}`);
+                                          if (!isNaN(cand.getTime())) {
+                                            startDate = cand;
+                                            displayTime = displayTime || cand.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                          }
+                                        }
+                                        const diff = startDate ? (startDate.getTime() - Date.now()) : null;
+                                        const startingSoon = diff != null && diff > 0 && diff <= 60 * 60 * 1000; // within 1 hour
+                                        return (
+                                          <>
+                                            {m.date} • {m.venue}
+                                            {displayTime ? (<span className="ml-2 px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-xs">Start {displayTime}</span>) : null}
+                                            {startingSoon ? (<span className="ml-2 px-2 py-0.5 rounded bg-orange-100 text-orange-800 text-xs">Starting soon</span>) : null}
+                                          </>
+                                        );
+                                      } catch (e) {
+                                        return (<>{m.date} • {m.venue}</>);
+                                      }
+                                    })()}
+                                  </div>
                                 <div className="font-semibold mt-1">{m.title}</div>
                                 <div className="text-sm text-gray-700 mt-1">{m.team1?.name} vs {m.team2?.name}</div>
+                                {m.isFinalMatch && m.bracketInfo && (m.bracketInfo.winnerOfMatch1 || m.bracketInfo.winnerOfMatch2) && (
+                                  <div className="text-xs text-gray-500 mt-2 italic">
+                                    Winner of #{m.bracketInfo.winnerOfMatch1 || '?'} vs Winner of #{m.bracketInfo.winnerOfMatch2 || '?'}
+                                  </div>
+                                )}
                               </>
                             ) : (
                               <div className="grid grid-cols-1 gap-2">
@@ -1696,6 +2519,10 @@ function Umpire() {
                                   <div>
                                     <label className="block text-xs text-gray-600">Overs</label>
                                     <input type="number" min={1} max={50} className="w-full border rounded px-2 py-1 text-sm" value={editOvers} onChange={e=>setEditOvers(e.target.value)} />
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs text-gray-600">Start Time</label>
+                                    <input type="time" className="w-full border rounded px-2 py-1 text-sm" value={editStartTime} onChange={e=>setEditStartTime(e.target.value)} />
                                   </div>
                                 </div>
                                 <div>
@@ -1787,32 +2614,12 @@ function Umpire() {
                       </select>
                     </div>
                     <div className="flex items-center gap-3">
-                      <img src={pAvatarPreview || pAvatar} alt="avatar preview" className="w-12 h-12 rounded-full border object-cover" />
-                      <div className="text-xs text-gray-600">Choose default avatar or upload a photo</div>
+                      <img src={pGender==='female'? '/Teams/imgImage48.png':'/Teams/imgImage8.png'} alt="avatar preview" className="w-12 h-12 rounded-full border object-cover" />
+                      <div className="text-xs text-gray-600">Avatar auto-set by gender (upload disabled)</div>
                     </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
-                    <div className="flex items-center gap-2">
-                      <button type="button" className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded text-sm" onClick={()=> { setPAvatar(pGender==='female'? '/Teams/imgImage48.png' : '/Teams/imgImage8.png'); setPAvatarPreview(''); }}>Use Default Avatar</button>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <label className="block text-sm text-gray-700">Upload Photo</label>
-                      <input type="file" accept="image/*" onChange={async(e)=>{
-                        const file = e.target.files && e.target.files[0];
-                        if (!file) return;
-                        try {
-                          setPUploading(true);
-                          try { const localUrl = URL.createObjectURL(file); setPAvatarPreview(localUrl); } catch {}
-                          const dataUrl = await readImageInline(file);
-                          setPAvatar(dataUrl);
-                          setPAvatarPreview(dataUrl);
-                        } catch (err) {
-                          setMessage('Error uploading photo: ' + (err?.message || String(err)));
-                        } finally {
-                          setPUploading(false);
-                        }
-                      }} />
-                    </div>
+                    <div className="flex items-center gap-2 text-xs text-gray-500">Custom photo upload disabled.</div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
@@ -1832,6 +2639,15 @@ function Umpire() {
                     </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-gray-700 mb-1">Bowling Style</label>
+                      <select className="w-full border rounded px-3 py-2" value={pBowlingStyle} onChange={e=> setPBowlingStyle(e.target.value)}>
+                        <option value="right-arm">Right Arm</option>
+                        <option value="left-arm">Left Arm</option>
+                        <option value="right-arm-spin">Right Arm Spin</option>
+                        <option value="left-arm-spin">Left Arm Spin</option>
+                      </select>
+                    </div>
                     <div>
                       <label className="block text-sm text-gray-700 mb-1">Status (optional)</label>
                       <select className="w-full border rounded px-3 py-2" value={pStatus} onChange={e=>setPStatus(e.target.value)}>
@@ -1903,26 +2719,10 @@ function Umpire() {
                                 </div>
                               </div>
                               <div>
-                                <div className="mt-2 flex items-center gap-2">
-                                  <label className="text-xs text-gray-600">Upload New Photo</label>
-                                  <input type="file" accept="image/*" onChange={async(e)=>{
-                                    const file = e.target.files && e.target.files[0];
-                                    if (!file) return;
-                                    try {
-                                      try { const localUrl = URL.createObjectURL(file); setEpAvatarPreview(localUrl); } catch {}
-                                      const dataUrl = await readImageInline(file);
-                                      setEpAvatar(dataUrl);
-                                      setEpAvatarPreview(dataUrl);
-                                    } catch (err) {
-                                      setMessage('Error uploading photo: ' + (err?.message || String(err)));
-                                    }
-                                  }} />
+                                <div className="text-xs text-gray-500">Photo upload disabled.</div>
+                                <div className="mt-2">
+                                  <img src={epGender==='female'? '/Teams/imgImage48.png':'/Teams/imgImage8.png'} alt="avatar" className="w-12 h-12 rounded-full border object-cover" />
                                 </div>
-                                {(epAvatarPreview || epAvatar) && (
-                                  <div className="mt-2">
-                                    <img src={epAvatarPreview || epAvatar} alt="avatar preview" className="w-12 h-12 rounded-full border object-cover" />
-                                  </div>
-                                )}
                               </div>
                               <div className="grid grid-cols-2 gap-2">
                                 <div>
@@ -1940,6 +2740,18 @@ function Umpire() {
                                     <option value="">Select</option>
                                     <option value="right-handed">Right Handed</option>
                                     <option value="left-handed">Left Handed</option>
+                                  </select>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="block text-xs text-gray-600">Bowling Style</label>
+                                  <select className="w-full border rounded px-2 py-1 text-sm" value={epBowlingStyle||''} onChange={e=> setEpBowlingStyle(e.target.value)}>
+                                    <option value="">Select</option>
+                                    <option value="right-arm">Right Arm</option>
+                                    <option value="left-arm">Left Arm</option>
+                                    <option value="right-arm-spin">Right Arm Spin</option>
+                                    <option value="left-arm-spin">Left Arm Spin</option>
                                   </select>
                                 </div>
                               </div>
@@ -1961,9 +2773,10 @@ function Umpire() {
                                   setEpAge(String(pl.age||''));
                                   setEpGender(pl.gender||'male');
                                   setEpAvatar(pl.avatar || (pl.gender==='female'?'/Teams/imgImage48.png':'/Teams/imgImage8.png'));
+                                  setEpModelUrl(pl.modelUrl || '/model.glb');
                                   setEpStatus(pl.status||'available');
                                   setEpJerseyNumber(String(pl.jerseyNumber || pl.jerseyNo || pl.jersey || ''));
-                                  try { setEpRole(pl.role||''); setEpBattingStyle(pl.battingStyle||''); } catch {}
+                                  try { setEpRole(pl.role||''); setEpBattingStyle(pl.battingStyle||''); setEpBowlingStyle(pl.bowlingStyle||''); } catch {}
                                 }}>Edit</button>
                                 <button className="bg-red-50 border border-red-300 hover:bg-red-100 text-red-700 px-3 py-2 rounded text-sm" onClick={async()=>{
                                   if (!window.confirm(`Delete player "${pl.name}"?`)) return;
@@ -1981,6 +2794,7 @@ function Umpire() {
                                     const updates = { name: epName, age: parseInt(epAge)||0, gender: epGender, status: epStatus };
                                     if (typeof epRole === 'string') updates.role = epRole;
                                     if (typeof epBattingStyle === 'string') updates.battingStyle = epBattingStyle;
+                                    if (typeof epBowlingStyle === 'string') updates.bowlingStyle = epBowlingStyle;
                                     if (epJerseyNumber) {
                                       const jn = parseInt(epJerseyNumber,10);
                                       if (Number.isFinite(jn)) updates.jerseyNumber = jn; else setMessage('Invalid jersey number (ignored).');
@@ -1991,11 +2805,25 @@ function Umpire() {
                                       // If reverting to default we remove the avatar field so fallbacks apply
                                       updates.avatar = '';
                                     }
+                                      // Update modelUrl if explicitly set
+                                      try {
+                                        if (typeof epModelUrl === 'string' && epModelUrl.trim()) {
+                                          updates.modelUrl = epModelUrl.trim();
+                                        }
+                                      } catch {}
                                     await updateDoc(doc(db,'players', pl.id), updates);
                                     setMessage('Player updated.');
                                   } catch(e){ setMessage('Error updating: '+(e?.message||String(e))); }
                                   setPlayerEditingId('');
                                 }}>Save</button>
+                                <div className="col-span-2 mt-2">
+                                  <label className="block text-xs text-gray-600">3D Model</label>
+                                  <select className="w-full border rounded px-2 py-1 text-sm" value={epModelUrl||''} onChange={e=> setEpModelUrl(e.target.value)}>
+                                    <option value="">Default model</option>
+                                    <option value="/models/Ayush.glb">Ayush Rathaur</option>
+                                    <option value="/models/Shubhankit.glb">Shubhankit (Shubhankit.glb)</option>
+                                  </select>
+                                </div>
                                 <button className="bg-gray-100 border border-gray-300 hover:bg-gray-200 text-gray-800 px-3 py-2 rounded text-sm" onClick={()=> setPlayerEditingId('')}>Cancel</button>
                               </>
                             )}
@@ -2050,14 +2878,16 @@ function Umpire() {
                           <>
                             <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded" onClick={async()=>{
                               const t = currentMatch?.team1 || {}; const next = { ...t, players: team1Roster, numPlayers: team1Roster.length };
-                              await updateDoc(doc(db,'matches','current-match'), { team1: next });
-                              if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team1: next });
+                              const safeNext = sanitizeTeamForMatch(next);
+                              await updateDoc(doc(db,'matches','current-match'), { team1: safeNext });
+                              if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team1: safeNext });
                               setMessage('Team 1 saved.');
                             }}>Save Team 1</button>
                             <button className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded" onClick={async()=>{
                               const t = currentMatch?.team1 || {}; const next = { ...t, players: team1Roster, numPlayers: team1Roster.length, rosterLocked: true };
-                              await updateDoc(doc(db,'matches','current-match'), { team1: next });
-                              if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team1: next });
+                              const safeNext = sanitizeTeamForMatch(next);
+                              await updateDoc(doc(db,'matches','current-match'), { team1: safeNext });
+                              if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team1: safeNext });
                               setT1Locked(true); setMessage('Team 1 locked.');
                             }}>Lock Team 1</button>
                           </>
@@ -2066,8 +2896,9 @@ function Umpire() {
                             <span className="text-green-700 font-medium">Locked</span>
                             <button className="bg-gray-200 hover:bg-gray-300 px-4 py-2 rounded" onClick={async()=>{
                               const t = currentMatch?.team1 || {}; const next = { ...t, rosterLocked: false };
-                              await updateDoc(doc(db,'matches','current-match'), { team1: next });
-                              if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team1: next });
+                              const safeNext = sanitizeTeamForMatch(next);
+                              await updateDoc(doc(db,'matches','current-match'), { team1: safeNext });
+                              if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team1: safeNext });
                               setT1Locked(false);
                             }}>Edit</button>
                           </>
@@ -2089,14 +2920,16 @@ function Umpire() {
                           <>
                             <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded" onClick={async()=>{
                               const t = currentMatch?.team2 || {}; const next = { ...t, players: team2Roster, numPlayers: team2Roster.length };
-                              await updateDoc(doc(db,'matches','current-match'), { team2: next });
-                              if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team2: next });
+                              const safeNext = sanitizeTeamForMatch(next);
+                              await updateDoc(doc(db,'matches','current-match'), { team2: safeNext });
+                              if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team2: safeNext });
                               setMessage('Team 2 saved.');
                             }}>Save Team 2</button>
                             <button className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded" onClick={async()=>{
                               const t = currentMatch?.team2 || {}; const next = { ...t, players: team2Roster, numPlayers: team2Roster.length, rosterLocked: true };
-                              await updateDoc(doc(db,'matches','current-match'), { team2: next });
-                              if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team2: next });
+                              const safeNext = sanitizeTeamForMatch(next);
+                              await updateDoc(doc(db,'matches','current-match'), { team2: safeNext });
+                              if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team2: safeNext });
                               setT2Locked(true); setMessage('Team 2 locked.');
                             }}>Lock Team 2</button>
                           </>
@@ -2105,8 +2938,9 @@ function Umpire() {
                             <span className="text-green-700 font-medium">Locked</span>
                             <button className="bg-gray-200 hover:bg-gray-300 px-4 py-2 rounded" onClick={async()=>{
                               const t = currentMatch?.team2 || {}; const next = { ...t, rosterLocked: false };
-                              await updateDoc(doc(db,'matches','current-match'), { team2: next });
-                              if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team2: next });
+                              const safeNext = sanitizeTeamForMatch(next);
+                              await updateDoc(doc(db,'matches','current-match'), { team2: safeNext });
+                              if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team2: safeNext });
                               setT2Locked(false);
                             }}>Edit</button>
                           </>
@@ -2136,9 +2970,9 @@ function Umpire() {
                         <div className="flex items-end">
                           <button className="btn-primary" onClick={async()=>{
                             const toss = { winner: tossWinnerSel, decision: tossDecisionSel };
-                            await updateDoc(doc(db,'matches','current-match'), { toss });
-                            if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { toss });
-                            setMessage('Toss saved.');
+                            queueUpdate(doc(db,'matches','current-match'), { toss });
+                            if (currentMatch?.id) queueUpdate(doc(db,'matches', currentMatch.id), { toss });
+                            setMessage('Toss queued.');
                           }}>Save Toss</button>
                         </div>
                       </div>
@@ -2153,8 +2987,18 @@ function Umpire() {
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                       <button onClick={async()=>{
                         if (!t1Locked || !t2Locked) { setMessage('Lock both teams before starting the match.'); return; }
-                        await updateDoc(doc(db,'matches','current-match'), { status: 'live', lastUpdated: new Date() });
-                        if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { status: 'live' });
+                        // Derive initial batting team from toss if available
+                        let initialBatting = 'team1';
+                        try {
+                          if (currentMatch?.toss?.winner && currentMatch?.toss?.decision) {
+                            const w = currentMatch.toss.winner; // 'team1' | 'team2'
+                            const d = currentMatch.toss.decision; // 'bat' | 'bowl'
+                            initialBatting = d === 'bat' ? w : (w === 'team1' ? 'team2' : 'team1');
+                          }
+                        } catch {}
+                        // Ensure innings array seeded for batting team
+                        const { innings } = getInningsCopy();
+                        await persistMatch({ status: 'live', battingTeam: initialBatting, innings });
                         setMessage('Match set to Live.');
                         try { window.alert('Match set to Live successfully.'); } catch {}
                       }} className={`flex items-center justify-center space-x-2 text-white py-3 px-4 rounded ${t1Locked && t2Locked ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-400 cursor-not-allowed'}`} disabled={!t1Locked || !t2Locked}>Start Match</button>
@@ -2167,10 +3011,8 @@ function Umpire() {
                         const hasFirstInnings = inns.some(i=> i?.teamKey === otherKey);
                         if (hasFirstInnings) {
                           if (!(currentMatch?.awards?.manOfTheMatchId)) { setMessage('Please select Man of the Match in Awards before completing the match.'); return; }
-                          // Second innings -> complete match
                           const result = computeResult(inns);
-                          await persistMatch({ status: 'completed', result, completedAt: new Date(), lastUpdated: new Date() });
-                          await finalizeMatchAndUpdateStats();
+                          await finalizeMatchAndUpdateStats({ status: 'completed', result, completedAt: new Date() });
                           setMessage('Match completed.');
                           try { window.alert('Match completed successfully.'); } catch {}
                         } else {
@@ -2184,8 +3026,7 @@ function Umpire() {
                         if (!(currentMatch?.awards?.manOfTheMatchId)) { setMessage('Please select Man of the Match in Awards before completing the match.'); return; }
                         const inns = Array.isArray(currentMatch?.innings) ? currentMatch.innings : [];
                         const result = computeResult(inns) || 'Match completed';
-                        await persistMatch({ status: 'completed', result, completedAt: new Date(), lastUpdated: new Date() });
-                        await finalizeMatchAndUpdateStats();
+                        await finalizeMatchAndUpdateStats({ status: 'completed', result, completedAt: new Date() });
                         setMessage('Match completed.');
                         try { window.alert('Match completed successfully.'); } catch {}
                       }} className="flex items-center justify-center space-x-2 bg-gray-700 hover:bg-gray-800 text-white py-3 px-4 rounded">End Match</button>
@@ -2408,9 +3249,9 @@ function Umpire() {
                           const wkts2 = Math.max(0, Math.min(maxWickets, parseInt(ovrT2Wkts)||0));
                           const over = Math.max(0, parseInt(ovrOver)||0);
                           const ball = Math.max(0, Math.min(5, parseInt(ovrBall)||0));
-                          await updateDoc(doc(db,'matches','current-match'), { team1: { ...t1, runs: runs1, wickets: wkts1 }, team2: { ...t2, runs: runs2, wickets: wkts2 }, currentOver: over, currentBall: ball });
-                          if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { team1: { ...t1, runs: runs1, wickets: wkts1 }, team2: { ...t2, runs: runs2, wickets: wkts2 }, currentOver: over, currentBall: ball });
-                          setMessage('Scores updated.');
+                          queueUpdate(doc(db,'matches','current-match'), { team1: { ...t1, runs: runs1, wickets: wkts1 }, team2: { ...t2, runs: runs2, wickets: wkts2 }, currentOver: over, currentBall: ball });
+                          if (currentMatch?.id) queueUpdate(doc(db,'matches', currentMatch.id), { team1: { ...t1, runs: runs1, wickets: wkts1 }, team2: { ...t2, runs: runs2, wickets: wkts2 }, currentOver: over, currentBall: ball });
+                          setMessage('Scores queued for batch.');
                         }}>Save Overrides</button>
                         <button className="bg-gray-200 hover:bg-gray-300 px-4 py-2 rounded" onClick={()=>{
                           setOvrT1Runs(String(currentMatch?.team1?.runs ?? ''));
@@ -2435,26 +3276,24 @@ function Umpire() {
                             const rosterCombined = [...(team1Roster||[]), ...(team2Roster||[])];
                             const name = rosterCombined.find(p=> (p.id||p.playerId)===pid)?.name || '';
                             const awards = { ...(currentMatch?.awards||{}), manOfTheMatchId: pid, manOfTheMatch: name };
-                            await updateDoc(doc(db,'matches','current-match'), { awards });
-                            if (currentMatch?.id) await updateDoc(doc(db,'matches', currentMatch.id), { awards });
-                            // POTM increment logic: increment new selection; if changed, decrement previous
+                            queueUpdate(doc(db,'matches','current-match'), { awards });
+                            if (currentMatch?.id) queueUpdate(doc(db,'matches', currentMatch.id), { awards });
+                            // POTM increment/decrement logic with safe clamp to 0 for decrements
                             try {
                               if (pid && pid !== prevId) {
                                 // increment new player
-                                try { await updateDoc(doc(db,'players', pid), { potmAwards: increment(1) }); } catch {}
-                                try { await updateDoc(doc(db,'playerProfiles', pid), { potmAwards: increment(1) }); } catch {}
-                                // decrement previous player if previously set
+                                try { queueUpdate(doc(db,'players', pid), { potmAwards: increment(1) }); } catch {}
+                                try { queueUpdate(doc(db,'playerProfiles', pid), { potmAwards: increment(1) }); } catch {}
+                                // decrement previous player if previously set (safe clamp)
                                 if (prevId) {
-                                  try { await updateDoc(doc(db,'players', prevId), { potmAwards: increment(-1) }); } catch {}
-                                  try { await updateDoc(doc(db,'playerProfiles', prevId), { potmAwards: increment(-1) }); } catch {}
+                                  try { safeModifyPotm(prevId, -1); } catch {}
                                 }
                               } else if (!pid && prevId) {
-                                // Clearing selection: revert previous increment
-                                try { await updateDoc(doc(db,'players', prevId), { potmAwards: increment(-1) }); } catch {}
-                                try { await updateDoc(doc(db,'playerProfiles', prevId), { potmAwards: increment(-1) }); } catch {}
+                                // Clearing selection: revert previous increment (safe clamp)
+                                try { safeModifyPotm(prevId, -1); } catch {}
                               }
                             } catch {}
-                            setMessage('Man of the Match saved.');
+                            setMessage('Man of the Match queued.');
                             try { window.alert('Man of the Match saved successfully.'); } catch {}
                           }}>
                             <option value="">Select player</option>

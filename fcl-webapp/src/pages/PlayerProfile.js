@@ -6,9 +6,9 @@ import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { getPlayerAvatar } from '../utils/getPlayerAvatar';
-import PlayerModelViewer from '../components/PlayerModelViewer';
 import { calculateDream11Points, playerDocToStats } from '../utils/dream11Points';
 import { ChevronLeftIcon } from '@heroicons/react/24/outline';
+import { FaMale, FaFemale } from 'react-icons/fa';
 
 function Stat({ label, value, highlight = false }) {
   return (
@@ -92,7 +92,11 @@ export default function PlayerProfile() {
   if (!player) return <div className="p-6">Player not found</div>;
 
   // Unified stats (fallback through profile -> player fields)
-  const num = (v) => (Number.isFinite(v) ? v : 0);
+  // Numeric helper: coerce to number, default 0, and clamp minimum to 0
+  const num = (v) => {
+    const n = Number.isFinite(v) ? v : 0;
+    return n < 0 ? 0 : n;
+  };
   const matches = num(profile?.totalMatches ?? player?.matches);
   const runs = num(profile?.totalRuns ?? player?.runs);
   const wickets = num(profile?.totalWickets ?? player?.wickets);
@@ -108,62 +112,22 @@ export default function PlayerProfile() {
     const overs = ballsBowledAgg / 6;
     economy = Math.round(((num(profile?.runsConceded ?? player?.runsConceded) / overs)) * 100) / 100;
   }
+  // Clamp rates to >= 0 when present
+  if (typeof strikeRate === 'number') strikeRate = Math.max(0, strikeRate);
+  if (typeof economy === 'number') economy = Math.max(0, economy);
   const highestScore = num(profile?.highestScore ?? profile?.highScore ?? player?.highestScore ?? player?.highScore ?? player?.hs);
   const bestWickets = num(profile?.bestWickets ?? profile?.highWicket ?? player?.bestWickets ?? player?.highWicket ?? player?.best);
   const avatar = getPlayerAvatar(player) || getPlayerAvatar(profile);
   // Role & Batting style from player doc first, fallback to profile collection; final fallback 'Player'
-  const role = (player?.role || player?.type || profile?.role || profile?.primaryRole || 'Player');
-  const battingStyle = (player?.battingStyle || profile?.battingStyle || '').replace(/-/g,' ');
+  const role = (player?.role || player?.type || profile?.role || profile?.primaryRole || 'Player').replace(/-/g,' ').replace(/\b\w/g, c => c.toUpperCase());
+  const battingStyle = (player?.battingStyle || profile?.battingStyle || '').replace(/-/g,' ').replace(/\b\w/g, c => c.toUpperCase());
   // Ranking by Dream11 points across all players
   // const team = player?.team || profile?.team || '—';
 
   return (
     <div className="min-h-screen bg-[#f8f8f8]">
       <div className="max-w-5xl mx-auto pb-10 bg-white">
-
-        {/* Hero: blue-white gradient with avatar and name */}
-        {/* <div
-          className="relative  overflow-hidden shadow-[0_6px_15px_0_rgba(0,0,0,0.08)]"
-          style={{
-            background: "linear-gradient(to bottom, #2C60CE 0%, #13306F 100%)",
-          }}
-        >
-          <div className="h-10 sm:h-40 " />
-          <div className=" px-4 sm:px-6 pb-5 pt-14 sm:pt-16 h-[162px] w-[393px]">
-            <div className="flex items-center gap-4 sm:gap-6">
-              <div className="-mt-16 sm:-mt-20 w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-white overflow-hidden shrink-0">
-                {avatar ? (
-                  <img src={avatar} alt={player.name} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-white text-3xl font-extrabold" style={{background: 'linear-gradient(135deg, #2c60ce 0%, #5b82e6 60%)'}}>
-                    {String(player.name || '?').charAt(0)}
-                  </div>
-                )}
-              </div>
-              <div className="min-w-0">
-                <h1 className="text-xl sm:text-3xl font-extrabold text-[#111] leading-tight truncate">{player.name}</h1>
-                <div className="flex items-center gap-2">
-                  <div className="text-[#586172] text-sm sm:text-base truncate">{team}</div>
-                  {isUnavailableToday && (
-                    <span className="inline-flex items-center px-2 py-[2px] rounded-full text-[10px] font-semibold bg-[#ffe8e8] text-[#d92d20] border border-[#f3d6d6] whitespace-nowrap">Unavailable today</span>
-                  )}
-                </div>
-                <div className="text-[#9ca4ab] text-xs sm:text-sm capitalize">{role}</div>
-              </div>
-              {userProfile?.isAdmin && (
-                <div className="ml-auto -mt-14 sm:-mt-16">
-                  <button
-                    onClick={toggleAvailability}
-                    disabled={busy}
-                    className={`text-xs sm:text-sm px-3 py-1 rounded-full border ${isUnavailableToday ? 'bg-white text-[#d92d20] border-[#f3d6d6] hover:bg-[#fff7f7]' : 'bg-white text-[#2c60ce] border-[#cfd8ea] hover:bg-[#f3f7ff]'} transition`}
-                  >
-                    {busy ? 'Saving…' : (isUnavailableToday ? 'Make available today' : 'Mark unavailable today')}
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div> */}
+        {/* Header Section */}
         <div
           className="relative overflow-hidden shadow-[0_6px_15px_0_rgba(0,0,0,0.08)]"
           style={{
@@ -210,12 +174,11 @@ export default function PlayerProfile() {
               </h1> */}
 
               {/* Team and Role */}
-              <div className="mt-2 flex flex-col gap-1">
-                <div className="flex flex-wrap gap-2">
-            <div className={`border w-20 text-center rounded-2xl ${rankBadge.className} shadow`}>Rank {myRank ? `${myRank}` : '-'}</div>
-              <div className="text-white w-20 text-[16px]  bg-[#2c60ce] text-center rounded-2xl">Points: {Math.round(myPoints)}</div>
-          {/* </div> */}
-                </div>
+                <div className="mt-2 flex flex-col gap-1">
+                  <div className="flex flex-wrap gap-2">
+                    <div className={`border text-center rounded-2xl ${rankBadge.className} shadow inline-flex items-center justify-center px-3 py-1 text-sm`}>Rank {myRank ? `${myRank}` : '-'}</div>
+                    <div className="text-white bg-[#2c60ce] text-center rounded-2xl inline-flex items-center justify-center px-3 py-1 text-sm">Points: {Math.round(myPoints)}</div>
+                  </div>
 
                 {/* Unavailable Badge */}
                 {isUnavailableToday && (
@@ -226,9 +189,13 @@ export default function PlayerProfile() {
               </div>
             </div>
 
-            {/* 3D Model / Avatar - Bottom Right */}
+            {/* Avatar - Bottom Right */}
             <div className="w-[10rem] h-[10rem] sm:w-28 sm:h-28 shrink-0 mb-[-10px] relative z-10">
-              <PlayerModelViewer modelUrl={player?.modelUrl || '/model.glb'} poster={avatar} alt={`3D model of ${player?.name || 'player'}`} />
+              <img 
+                src={avatar || (gender === 'female' ? '/Teams/imgImage48.png' : '/Teams/imgImage8.png')} 
+                alt={player?.name || 'player'} 
+                className="w-full h-full object-cover rounded-full"
+              />
             </div>
           </div>
 
@@ -263,10 +230,15 @@ export default function PlayerProfile() {
               const display = (v) => (v !== undefined && v !== null && String(v).trim() !== '' ? v : '—');
               const genderText = (player?.gender || profile?.gender) ? String(player?.gender || profile?.gender) : '—';
               const jerseyNo = (player?.jerseyNumber ?? player?.jerseyNo ?? player?.jersey ?? profile?.jerseyNumber ?? profile?.jerseyNo ?? '—');
-              const bowlingStyle = (player?.bowlingStyle || profile?.bowlingStyle || '').replace(/-/g,' ').trim();
+              const bowlingStyle = (player?.bowlingStyle || profile?.bowlingStyle || '')
+                .replace(/-/g,' ')
+                .replace(/\b\w/g, c => c.toUpperCase())
+                .trim();
               const potmAwards = (() => {
-                const v = (profile?.potmAwards ?? player?.potmAwards ?? (player?.awards && player.awards.potm) ?? (profile?.awards && profile.awards.potm));
-                return Number.isFinite(v) ? v : (v ? v : 0);
+                const raw = (profile?.potmAwards ?? player?.potmAwards ?? (player?.awards && player.awards.potm) ?? (profile?.awards && profile.awards.potm));
+                const n = Number(raw);
+                if (!Number.isFinite(n)) return 0;
+                return Math.max(0, n);
               })();
               return (
                 <div className="grid grid-cols-2 gap-4">
@@ -275,14 +247,26 @@ export default function PlayerProfile() {
                     <div className="text-md sm:text-2xl font-normal text-[#111]">{display(player?.age)}</div>
                   </div>
                   <div className="p-3 sm:p-4 rounded-xl bg-white border border-[#e6eaf2] shadow-sm">
-                    <div className="text-xs text-[#8a93a0]">Gender</div>
-                    <div className="text-md sm:text-2xl font-normal text-[#111] capitalize">{display(genderText)}</div>
+                        <div className="text-xs text-[#8a93a0]">Gender</div>
+                        <div className="text-md sm:text-2xl font-normal text-[#111] capitalize flex items-center justify-between">
+                          <span className='flex'>{display(genderText)}
+                             <span className="ml-3 flex items-center">
+                            {(() => {
+                              const g = String(player?.gender || profile?.gender || '').toLowerCase();
+                              if (g === 'female') return <FaFemale className="w-5 h-5 text-pink-500" />;
+                              if (g === 'male') return <FaMale className="w-5 h-5  text-blue-600" />;
+                              return null;
+                            })()}
+                          </span>
+                          </span>
+                         
+                        </div>
                     
                   </div>
-                  <div className="bg-white border border-[#e6eaf2] rounded-xl shadow-sm p-4">
+                  {/* <div className="bg-white border border-[#e6eaf2] rounded-xl shadow-sm p-4">
                     <div className="text-xs text-[#8a93a0]">Jersey No</div>
                     <div className="text-md sm:text-2xl font-normal text-[#111]">{display(jerseyNo)}</div>
-                  </div>
+                  </div> */}
                   <div className="bg-white border border-[#e6eaf2] rounded-xl shadow-sm p-4">
                     <div className="text-xs text-[#8a93a0]">Role</div>
                     <div className="text-md sm:text-2xl font-normal text-[#111]">{display(role)}</div>
@@ -314,10 +298,10 @@ export default function PlayerProfile() {
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <Stat label="Matches" value={matches} />
             <Stat label="Runs" value={runs} />
-            <Stat label="Strike Rate" value={strikeRate ? strikeRate.toFixed(1) : '—'} />
+            <Stat label="Strike Rate" value={strikeRate != null ? strikeRate.toFixed(1) : '—'} />
             <Stat label="HS" value={highestScore || '—'} />
-            <Stat label="4s" value={player?.fours ?? '—'} />
-            <Stat label="6s" value={player?.sixes ?? '—'} />
+            <Stat label="4s" value={num(profile?.fours ?? player?.fours)} />
+            <Stat label="6s" value={num(profile?.sixes ?? player?.sixes)} />
           </div>
         </div>
 
@@ -332,8 +316,25 @@ export default function PlayerProfile() {
             <Stat label="Wickets" value={wickets} />
             <Stat label="Economy" value={economy != null ? economy.toFixed(2) : '—'} />
             <Stat label="Best Wkts" value={bestWickets || '—'} />
-            <Stat label="Maidens" value={player?.maidens ?? '—'} />
-            <Stat label="Dots" value={player?.dotBalls ?? '—'} />
+            <Stat label="Maidens" value={num(profile?.maidens ?? player?.maidens)} />
+            <Stat label="Dots" value={num(profile?.dotBalls ?? player?.dotBalls)} />
+          </div>
+        </div>
+
+        {/* Fielding Stats */}
+        <div className="mt-2 mb-12 bg-white p-4 sm:p-6">
+          <div className="flex items-center gap-2 mb-3 sm:mb-4">
+            <img src="/player.png" alt="Fielding" className="w-6 h-6" />
+
+            <span className="font-normal text-[18px] text-[#111]">Fielding Stats</span>
+          </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <Stat label="Matches" value={matches} />
+            <Stat label="Catches" value={num(profile?.catches ?? player?.catches)} />
+            <Stat label="Run-outs (Direct)" value={num(profile?.runOutDirect ?? player?.runOutDirect)} />
+            <Stat label="Stumpings" value={num(profile?.stumpings ?? player?.stumpings)} />
+            {/* <Stat label="Run-outs (Assist)" value={num(profile?.runOutIndirect ?? player?.runOutIndirect)} /> */}
+            {/* <Stat label="Run-outs (Total)" value={num(profile?.runOutDirect ?? player?.runOutDirect) + num(profile?.runOutIndirect ?? player?.runOutIndirect)} /> */}
           </div>
         </div>
       </div>

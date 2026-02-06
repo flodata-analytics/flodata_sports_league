@@ -70,7 +70,7 @@ FCL_Apk/
 ### Installation
 
 1. **Clone the repository**
-   ```bash
+    https://expo.dev/artifacts/eas/fcl2025.apk
    git clone https://github.com/yourusername/fcl-2025-app.git
    cd fcl-2025-app
    ```
@@ -78,27 +78,16 @@ FCL_Apk/
 2. **Install dependencies**
    ```bash
    npm install
-   ```
 
 3. **Start the development server**
    ```bash
    npx expo start
    ```
 
-4. **Run on Android (Development)**
-   - Scan the QR code with [Expo Go](https://expo.dev/client) app, or
-   - Press `a` in the terminal to open on Android emulator
----
 
 ## 📲 Building for Production
-
-### Build Android APK
-
 ```bash
 # Login to Expo account
-eas login
-
-# Build APK (for direct installation/sideloading)
 eas build -p android --profile preview
 
 # Build AAB (for Google Play Store)
@@ -125,7 +114,6 @@ The build will be uploaded to EAS servers. Once complete, you'll receive a downl
 ## 🔧 Configuration
 
 ### Key Files
-
 #### `app.json`
 - App name, version, and slug
 - Icon and splash screen paths
@@ -146,18 +134,10 @@ The build will be uploaded to EAS servers. Once complete, you'll receive a downl
 
 **Change Website URL:**
 ```typescript
-// app/index.tsx
-const WEBSITE_URL = 'https://your-website.com/';
-```
-
 **Update App Name & Icon:**
 ```json
 // app.json
-{
-  "expo": {
-    "name": "Your App Name",
     "icon": "./assets/images/your-icon-1024.png"
-  }
 }
 ```
 
@@ -176,7 +156,6 @@ const WEBSITE_URL = 'https://your-website.com/';
 The core of the app uses `react-native-webview` to embed the website:
 
 ```typescript
-<WebView
   source={{ uri: websiteUrl, headers: { 'Cache-Control': 'no-cache' } }}
   javaScriptEnabled={true}
   domStorageEnabled={true}
@@ -185,10 +164,6 @@ The core of the app uses `react-native-webview` to embed the website:
 />
 ```
 
-### Cache Management
-
-Injected JavaScript automatically:
-- Unregisters service workers
 - Clears Cache Storage API
 - Removes localStorage data
 - Reloads with cache-busting timestamps
@@ -197,9 +172,6 @@ Injected JavaScript automatically:
 
 - **Zoom Prevention:** Viewport meta tag enforcement + gesture blocking
 - **Fixed Bottom Nav:** CSS injection to keep navigation stable
-- **Status Bar Padding:** Dynamic padding based on Android status bar height
-
----
 
 ## 🧪 Testing
 
@@ -225,11 +197,7 @@ Use Expo Go app to scan QR code and test on physical device.
 ### Website Updates Not Reflecting
 
 **Problem:** Changes to the website don't appear in the app immediately.
-
-**Solution:** The app includes aggressive cache-busting:
-- Service workers are automatically unregistered
 - Cache Storage is cleared on load
-- URL timestamp parameters force fresh requests
 - WebView caching is disabled (`cacheEnabled={false}`)
 
 If issues persist, clear app data from Android settings.
@@ -241,43 +209,28 @@ If issues persist, clear app data from Android settings.
 **Solution:** This is fixed via injected JavaScript that:
 - Forces `position: fixed` on the nav element
 - Adds body padding to prevent content overlap
-- Uses `MutationObserver` to persist changes
 
 Check `INJECTED_BEFORE` script in `app/index.tsx`.
 
 ### Blurry App Icon
 
-**Problem:** Icon appears pixelated or low quality.
 
 **Solution:** Use a 1024x1024 PNG icon:
 ```json
-// app.json
-{
-  "expo": {
-    "icon": "./assets/images/your-icon-1024.png",
-    "splash": {
       "image": "./assets/images/your-icon-1024.png"
-    }
   }
 }
 ```
 
 ### QR Code Not Working in Expo Go
-
 **Problem:** Can't scan QR code or connection fails.
 
 **Solution:**
-- Use tunnel mode: `npx expo start --tunnel`
-- Ensure both devices are on the same network (for LAN mode)
-- Check firewall settings aren't blocking Metro bundler
 
----
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please follow these steps:
 
-1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
@@ -296,7 +249,6 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 - [Expo Documentation](https://docs.expo.dev/)
 - [React Native WebView Docs](https://github.com/react-native-webview/react-native-webview)
 - [EAS Build Guide](https://docs.expo.dev/build/introduction/)
-- [Expo Router Guide](https://docs.expo.dev/router/introduction/)
 - [FLOdata Tournaments Website](https://flodata-tournaments.web.app/)
 
 ---
@@ -334,8 +286,6 @@ Use Expo Go app to scan QR code and test on physical device.
 2. Install on physical Android device
 3. Test all features:
    - Navigation (back button)
-   - Cache updates (website changes)
-   - UI elements (zoom, bottom nav)
    - Network handling (offline scenarios)
 
 ---

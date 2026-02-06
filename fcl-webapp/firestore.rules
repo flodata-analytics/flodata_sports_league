@@ -3,17 +3,54 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // This rule allows anyone with your Firestore database reference to view, edit,
-    // and delete all data in your Firestore database. It is useful for getting
-    // started, but it is configured to expire after 30 days because it
-    // leaves your app open to attackers. At that time, all client
-    // requests to your Firestore database will be denied.
-    //
-    // Make sure to write security rules for your app before that time, or else
-    // all client requests to your Firestore database will be denied until you Update
-    // your rules
+    // Helper function to check if user is admin/umpire
+    function isAdminOrUmpire() {
+      return request.auth != null && (
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isUmpire == true
+      );
+    }
+
+    // Users collection - users can read/write their own profile, admins can read all
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (request.auth.uid == userId || isAdminOrUmpire());
+    }
+
+    // Players collection - public read, admin/umpire write
+    match /players/{playerId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Player profiles - public read, admin/umpire write
+    match /playerProfiles/{playerId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Matches - public read, authenticated users can write (for umpire control)
+    match /matches/{matchId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Teams - public read, authenticated users can write
+    match /teams/{teamId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // App config/settings - public read
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Default: allow authenticated read, deny write
     match /{document=**} {
-      allow read, write: if request.time < timestamp.date(2025, 11, 24);
+      allow read: if request.auth != null;
+      allow write: if false;
     }
   }
 }

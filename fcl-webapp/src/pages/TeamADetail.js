@@ -113,7 +113,7 @@ export default function TeamADetail() {
       {/* Players grid */}
       <div className="flex flex-row 4 justify-center pt-6 pb-[70px] w-full">
         {loading && <div className="text-gray-400 text-center">Loading players...</div>}
-        {error && <div className="text-red-500 text-center">Error loading players</div>}
+        {/* {error && <div className="text-red-500 text-center">Error loading players</div>} */}
         {filteredPlayers.length === 0 && !loading && !error && <div className="text-gray-400 text-center">No players found</div>}
         {filteredPlayers.length > 0 && (
           <>
